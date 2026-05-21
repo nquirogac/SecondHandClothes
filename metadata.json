@@ -1,0 +1,6 @@
+{
+  "name": "Used Clothing Social Marketplace",
+  "description": "A vibrant, modern social network and marketplace for buying, selling, and showcasing used clothing. Emulates a social feed with interactive likes, comments, details drawers, filters, and seller publishing, ready with PostgreSQL schema.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
