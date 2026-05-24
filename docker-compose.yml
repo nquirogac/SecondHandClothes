@@ -1,0 +1,17 @@
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+
+  test:
+    build:
+      context: .
+      target: test-runner
+    environment:
+      - NODE_ENV=test
+    entrypoint: ["npm", "test", "--", "--runInBand"]
