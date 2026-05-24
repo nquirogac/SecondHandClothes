@@ -11,6 +11,7 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 *.log
+service-account.json
 !.env.example
 !.env.local.example
 *-firebase-adminsdk-*.json
