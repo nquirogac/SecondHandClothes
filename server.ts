@@ -2,6 +2,7 @@ import "dotenv/config";
 import express, { type Request } from "express";
 import type { AddressInfo } from "net";
 import rateLimit from "express-rate-limit";
+import fs from "fs";
 import path from "path";
 import { User, ClothingItem, Comment, ChatMessage } from "./src/types";
 import { applicationDefault, cert, getApps as getAdminApps, initializeApp } from "firebase-admin/app";
@@ -13,10 +14,28 @@ const firebaseAdminApp = (() => {
   }
 
   const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (serviceAccountJson) {
+  const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  const resolvedServiceAccountJson = (() => {
+    if (serviceAccountJson) {
+      return serviceAccountJson;
+    }
+
+    if (!serviceAccountPath) {
+      return null;
+    }
+
+    try {
+      return fs.readFileSync(serviceAccountPath, "utf-8");
+    } catch (error) {
+      console.warn("Firebase Admin service account file could not be read. Falling back to default credentials.", error);
+      return null;
+    }
+  })();
+
+  if (resolvedServiceAccountJson) {
     try {
       return initializeApp({
-        credential: cert(JSON.parse(serviceAccountJson)),
+        credential: cert(JSON.parse(resolvedServiceAccountJson)),
       });
     } catch (error) {
       console.warn("Firebase Admin service account JSON could not be parsed. Falling back to default credentials.", error);

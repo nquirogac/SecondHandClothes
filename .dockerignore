@@ -10,3 +10,7 @@ coverage
 .DS_Store
 *.local
 *.tmp
+.env
+.env.*
+service-account.json
+*-firebase-adminsdk-*.json
