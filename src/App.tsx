@@ -319,6 +319,7 @@ export default function App() {
           id: "u_" + Date.now(),
           username: creds.username.toLowerCase(),
           email: creds.email || `${creds.username}@example.com`,
+          passwordHash: "",
           avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
           bio: "Guest thrifter aesthetic",
           stylePreference: ["Casual"],

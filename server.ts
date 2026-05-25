@@ -2,13 +2,15 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { User, ClothingItem, Comment, ChatMessage } from "./src/types";
+import { validateLogin, validateRegister, validateCreateItem, validateComment, validateChat } from "./src/middleware/inputValidation";
+import { sanitizeBody } from "./src/middleware/sanitizer";
+import { validatePasswordStrength, hashPassword, verifyPassword } from "./src/services/passwordService";
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Middleware for parsing JSON requests
-  app.use(express.json());
+  app.use(express.json({ limit: "10kb" }));
 
   // ============================================
   // SERVER STATE (Simulating PostgreSQL Dataset)
@@ -19,6 +21,7 @@ async function startServer() {
       id: "u1",
       username: "retro_lucia",
       email: "lucia@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
       bio: "Vintage enthusiast & thrifter. Collecting 80s and 90s original streetwear.",
       stylePreference: ["Vintage", "Casual"],
@@ -29,6 +32,7 @@ async function startServer() {
       id: "u2",
       username: "street_felix",
       email: "felix@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200",
       bio: "Hypebeast since 2018. Buy/Sell/Trade streetwear, cargo, graphic tees, sneakerhead.",
       stylePreference: ["Streetwear", "Sportswear"],
@@ -39,6 +43,7 @@ async function startServer() {
       id: "u3",
       username: "olivia_chic",
       email: "olivia@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=200",
       bio: "Curator of upscale Parisian vintage formalwear and classy accessories.",
       stylePreference: ["Formal", "Casual"],
@@ -49,6 +54,7 @@ async function startServer() {
       id: "u4",
       username: "eco_gabriel",
       email: "gabriel@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200",
       bio: "Environmentalist looking to extend life cycle of sustainable garment crafts.",
       stylePreference: ["Casual", "Sportswear"],
@@ -62,6 +68,7 @@ async function startServer() {
     id: "u0",
     username: "vintage_camila",
     email: "camila@example.com",
+    passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
     avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
     bio: "Love looking for treasures of the past. Sustainable fashion only! 🌱👗",
     stylePreference: ["Vintage", "Casual", "Formal"],
@@ -248,26 +255,28 @@ async function startServer() {
     res.json(currentUser);
   });
 
-  app.post("/api/login", (req, res) => {
+  app.post("/api/login", validateLogin, sanitizeBody(), (req, res) => {
     const { userId, username, email } = req.body;
-    let foundUser = users.find(u => u.id === userId || u.username === username || u.email === email);
-    
+    const foundUser = users.find(
+      (u) => u.id === userId || u.username === username || u.email === email,
+    );
+
     if (foundUser) {
       currentUser = foundUser;
       return res.json({ success: true, user: currentUser });
     }
-    
-    // Fallback: If username doesn't exist, log in as new with random profile setup
+
     if (username) {
       const newUser: User = {
         id: "u_" + Date.now(),
-        username: username,
+        username: username.toLowerCase().replace(/\s+/g, "_"),
         email: email || `${username}@example.com`,
+        passwordHash: "", // Empty hash for auto-created login users
         avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
         bio: "Bio not set yet - Tap edit profile to customize",
         stylePreference: ["Casual"],
         joinedDate: new Date().toISOString(),
-        rating: 5.0
+        rating: 5.0,
       };
       users.push(newUser);
       currentUser = newUser;
@@ -277,16 +286,44 @@ async function startServer() {
     res.status(400).json({ success: false, error: "Invalid login credentials" });
   });
 
-  app.post("/api/register", (req, res) => {
-    const { username, email, bio, stylePreference, avatar } = req.body;
-    if (!username || !email) {
-      return res.status(400).json({ error: "Username and Email are required parameters" });
+  app.post("/api/register", validateRegister, sanitizeBody(), async (req, res) => {
+    const { username, email, password, bio, stylePreference, avatar } = req.body;
+
+    // Validar fortaleza de la contraseña
+    const passwordCheck = validatePasswordStrength(password);
+    if (!passwordCheck.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: "Contraseña débil",
+        passwordErrors: passwordCheck.errors,
+      });
+    }
+
+    // Hashear la contraseña antes de guardar
+    let passwordHash: string;
+    try {
+      passwordHash = await hashPassword(password);
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        error: "Error al procesar la contraseña",
+      });
+    }
+
+    // Verificar que el usuario no exista ya
+    const userExists = users.find((u) => u.email === email || u.username === username);
+    if (userExists) {
+      return res.status(400).json({
+        success: false,
+        error: "El usuario o email ya está registrado",
+      });
     }
 
     const newUser: User = {
       id: "u_" + Date.now(),
       username: username.toLowerCase().replace(/\s+/g, "_"),
-      email: email,
+      email,
+      passwordHash, // Guardamos el hash, NUNCA la contraseña plana
       avatar: avatar || "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
       bio: bio || "Sustainable apparel searcher",
       stylePreference: stylePreference || ["Casual"],
@@ -296,7 +333,22 @@ async function startServer() {
 
     users.push(newUser);
     currentUser = newUser;
-    res.json({ success: true, user: currentUser });
+
+    // Devolver el usuario SIN mostrar el hash
+    res.json({
+      success: true,
+      message: "Usuario registrado exitosamente",
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        email: newUser.email,
+        avatar: newUser.avatar,
+        bio: newUser.bio,
+        stylePreference: newUser.stylePreference,
+        joinedDate: newUser.joinedDate,
+        rating: newUser.rating,
+      },
+    });
   });
 
   // Clothing Item Endpoints
@@ -304,33 +356,30 @@ async function startServer() {
     res.json(clothingItems);
   });
 
-  app.post("/api/items", (req, res) => {
+  app.post("/api/items", validateCreateItem, sanitizeBody({ allowRichText: true }), (req, res) => {
     const { title, description, imageUrl, category, size, brand, condition, price } = req.body;
-    if (!title || !price || !category || !size || !condition) {
-      return res.status(400).json({ error: "Missing required listing attributes" });
-    }
 
     const newItem: ClothingItem = {
       id: "c_" + Date.now(),
       sellerId: currentUser.id,
       sellerName: currentUser.username,
       sellerAvatar: currentUser.avatar,
-      title: title,
+      title,
       description: description || "Gorgeous pre-loved fashion piece.",
       imageUrl: imageUrl || "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=800",
-      category: category,
-      size: size,
+      category,
+      size,
       brand: brand || "Unbranded / Vintage",
-      condition: condition,
+      condition,
       price: Number(price),
       likesCount: 0,
       likedByUserIds: [],
       comments: [],
       status: "available",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
-    clothingItems.unshift(newItem); // Pushes to top of feed
+    clothingItems.unshift(newItem);
     res.json({ success: true, item: newItem });
   });
 
@@ -357,14 +406,11 @@ async function startServer() {
   });
 
   // Commments Social Element
-  app.post("/api/items/:id/comment", (req, res) => {
+  app.post("/api/items/:id/comment", validateComment, sanitizeBody({ allowRichText: false }), (req, res) => {
     const { id } = req.params;
     const { text } = req.body;
-    if (!text || text.trim() === "") {
-      return res.status(400).json({ error: "Comment text cannot be empty" });
-    }
 
-    const item = clothingItems.find(i => i.id === id);
+    const item = clothingItems.find((i) => i.id === id);
     if (!item) {
       return res.status(404).json({ error: "Item not found" });
     }
@@ -374,8 +420,8 @@ async function startServer() {
       userId: currentUser.id,
       username: currentUser.username,
       userAvatar: currentUser.avatar,
-      text: text,
-      createdAt: new Date().toISOString()
+      text,
+      createdAt: new Date().toISOString(),
     };
 
     item.comments.push(newComment);
@@ -408,20 +454,17 @@ async function startServer() {
   });
 
   // Send communication to seller
-  app.post("/api/chats", (req, res) => {
+  app.post("/api/chats", validateChat, sanitizeBody({ allowRichText: false }), (req, res) => {
     const { itemId, receiverId, text } = req.body;
-    if (!itemId || !receiverId || !text || text.trim() === "") {
-      return res.status(400).json({ error: "Missing required chat parameters" });
-    }
 
     const newChat: ChatMessage = {
       id: "ch_" + Date.now(),
-      itemId: itemId,
+      itemId,
       senderId: currentUser.id,
       senderName: currentUser.username,
-      receiverId: receiverId,
-      text: text,
-      createdAt: new Date().toISOString()
+      receiverId,
+      text,
+      createdAt: new Date().toISOString(),
     };
 
     chatMessages.push(newChat);
