@@ -4,6 +4,7 @@ import { createServer as createViteServer } from "vite";
 import { User, ClothingItem, Comment, ChatMessage } from "./src/types";
 import { validateLogin, validateRegister, validateCreateItem, validateComment, validateChat } from "./src/middleware/inputValidation";
 import { sanitizeBody } from "./src/middleware/sanitizer";
+import { validatePasswordStrength, hashPassword, verifyPassword } from "./src/services/passwordService";
 
 async function startServer() {
   const app = express();
@@ -20,6 +21,7 @@ async function startServer() {
       id: "u1",
       username: "retro_lucia",
       email: "lucia@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
       bio: "Vintage enthusiast & thrifter. Collecting 80s and 90s original streetwear.",
       stylePreference: ["Vintage", "Casual"],
@@ -30,6 +32,7 @@ async function startServer() {
       id: "u2",
       username: "street_felix",
       email: "felix@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200",
       bio: "Hypebeast since 2018. Buy/Sell/Trade streetwear, cargo, graphic tees, sneakerhead.",
       stylePreference: ["Streetwear", "Sportswear"],
@@ -40,6 +43,7 @@ async function startServer() {
       id: "u3",
       username: "olivia_chic",
       email: "olivia@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=200",
       bio: "Curator of upscale Parisian vintage formalwear and classy accessories.",
       stylePreference: ["Formal", "Casual"],
@@ -50,6 +54,7 @@ async function startServer() {
       id: "u4",
       username: "eco_gabriel",
       email: "gabriel@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200",
       bio: "Environmentalist looking to extend life cycle of sustainable garment crafts.",
       stylePreference: ["Casual", "Sportswear"],
@@ -63,6 +68,7 @@ async function startServer() {
     id: "u0",
     username: "vintage_camila",
     email: "camila@example.com",
+    passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
     avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
     bio: "Love looking for treasures of the past. Sustainable fashion only! 🌱👗",
     stylePreference: ["Vintage", "Casual", "Formal"],
@@ -265,6 +271,7 @@ async function startServer() {
         id: "u_" + Date.now(),
         username: username.toLowerCase().replace(/\s+/g, "_"),
         email: email || `${username}@example.com`,
+        passwordHash: "", // Empty hash for auto-created login users
         avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
         bio: "Bio not set yet - Tap edit profile to customize",
         stylePreference: ["Casual"],
@@ -279,13 +286,44 @@ async function startServer() {
     res.status(400).json({ success: false, error: "Invalid login credentials" });
   });
 
-  app.post("/api/register", validateRegister, sanitizeBody(), (req, res) => {
-    const { username, email, bio, stylePreference, avatar } = req.body;
+  app.post("/api/register", validateRegister, sanitizeBody(), async (req, res) => {
+    const { username, email, password, bio, stylePreference, avatar } = req.body;
+
+    // Validar fortaleza de la contraseña
+    const passwordCheck = validatePasswordStrength(password);
+    if (!passwordCheck.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: "Contraseña débil",
+        passwordErrors: passwordCheck.errors,
+      });
+    }
+
+    // Hashear la contraseña antes de guardar
+    let passwordHash: string;
+    try {
+      passwordHash = await hashPassword(password);
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        error: "Error al procesar la contraseña",
+      });
+    }
+
+    // Verificar que el usuario no exista ya
+    const userExists = users.find((u) => u.email === email || u.username === username);
+    if (userExists) {
+      return res.status(400).json({
+        success: false,
+        error: "El usuario o email ya está registrado",
+      });
+    }
 
     const newUser: User = {
       id: "u_" + Date.now(),
       username: username.toLowerCase().replace(/\s+/g, "_"),
       email,
+      passwordHash, // Guardamos el hash, NUNCA la contraseña plana
       avatar: avatar || "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
       bio: bio || "Sustainable apparel searcher",
       stylePreference: stylePreference || ["Casual"],
@@ -295,7 +333,22 @@ async function startServer() {
 
     users.push(newUser);
     currentUser = newUser;
-    res.json({ success: true, user: currentUser });
+
+    // Devolver el usuario SIN mostrar el hash
+    res.json({
+      success: true,
+      message: "Usuario registrado exitosamente",
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        email: newUser.email,
+        avatar: newUser.avatar,
+        bio: newUser.bio,
+        stylePreference: newUser.stylePreference,
+        joinedDate: newUser.joinedDate,
+        rating: newUser.rating,
+      },
+    });
   });
 
   // Clothing Item Endpoints

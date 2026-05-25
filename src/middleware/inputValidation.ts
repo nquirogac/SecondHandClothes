@@ -28,6 +28,7 @@ export const validateRegister = [
     .isLength({ min: 3, max: 30 })
     .matches(/^[a-zA-Z0-9_\-\.]+$/),
   body("email").isEmail().normalizeEmail(),
+  body("password").isString().isLength({ min: 8, max: 128 }),
   body("bio").optional().isString().isLength({ max: 1000 }),
   handleValidationResult,
 ];
