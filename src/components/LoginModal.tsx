@@ -21,7 +21,6 @@ export default function LoginModal({
   loginError,
   canClose,
 }: LoginModalProps) {
-  const [usernameInput, setUsernameInput] = useState("");
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [displayNameInput, setDisplayNameInput] = useState("");
