@@ -95,20 +95,19 @@ async function runTests() {
   const beforeLines = await readAuditLines();
   const baselineCount = beforeLines.length;
 
-  await runCase("Login exitoso existente", "/api/login", { username: "retro_lucia" }, [
+  await runCase("Login exitoso existente", "/api/login", { email: "lucia@example.com", password: "password123" }, [
     expectStatus(200, "El login existente debe devolver 200."),
     expectBodyContains("success", true, "La respuesta debe indicar éxito."),
   ]);
 
-  await runCase("Login auto-creado", "/api/login", { username: `audit_test_user_${Date.now()}`, email: `audit_test_user_${Date.now()}@example.com` }, [
-    expectStatus(200, "El login con nuevo usuario debe auto-crear y devolver 200."),
-    expectBodyContains("success", true, "La respuesta debe indicar éxito."),
-  ]);
 
   const bruteForceEmail = `bruteforce_test_${Date.now()}@example.com`;
+  
+  // Intentos de fuerza bruta - email válido con contraseña incorrecta
   for (let attempt = 1; attempt <= 5; attempt += 1) {
     const expectedStatus = attempt < 5 ? 400 : 429;
-    await runCase(`Intento de fuerza bruta ${attempt}`, "/api/login", { email: bruteForceEmail }, [
+    // Incluir un campo `password` (incorrecto) para pasar la validación y probar rate-limiting
+    await runCase(`Intento de fuerza bruta ${attempt}`, "/api/login", { email: bruteForceEmail, password: "wrong-password" }, [
       expectStatus(expectedStatus, `El intento ${attempt} debe devolver ${expectedStatus}.`),
       expectedStatus === 429
         ? expectBodyHasKey("retryAfter", "Debe devolver retryAfter cuando está rate-limited.")

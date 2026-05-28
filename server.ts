@@ -10,7 +10,7 @@ import { getLoginKey, isLoginBlocked, recordLoginFailure, recordLoginSuccess } f
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: "10kb" }));
 
@@ -274,7 +274,29 @@ async function startServer() {
       });
     }
 
-    const foundUser = users.find((u) => u.email === email);
+    let foundUser = users.find((u) => u.email === email);
+
+    // Auto-crear usuario si no existe (no guarda contraseña), y registrar el evento
+    if (!foundUser) {
+      const newUser = {
+        id: "u_" + Date.now(),
+        username: email.split("@")[0].toLowerCase().replace(/[^a-z0-9_]/g, "_") || "user",
+        email,
+        passwordHash: null,
+        avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
+        bio: "Auto-created account",
+        stylePreference: ["Casual"],
+        joinedDate: new Date().toISOString(),
+        rating: 0,
+      };
+      users.push(newUser);
+      foundUser = newUser;
+      void appendAuditLog("login.auto-created", {
+        userId: newUser.id,
+        email: newUser.email,
+        source: "login",
+      }).catch((err) => console.error("Audit log write failed:", err));
+    }
 
     if (foundUser && foundUser.passwordHash) {
       const passwordValid = verifyPassword(password, foundUser.passwordHash);

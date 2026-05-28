@@ -1,4 +1,4 @@
-const MAX_ATTEMPTS = 4;
+const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutos
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutos
 
@@ -63,7 +63,8 @@ export function recordLoginFailure(key: string) {
   }
 
   return {
-    blocked: wasAlreadyBlocked,
+    // blocked === true when the state indicates a lockout (either just set or previously set)
+    blocked: state.lockedUntil !== null,
     attempts: state.count,
     retryAfter: state.lockedUntil ? Math.ceil((state.lockedUntil - getNow()) / 1000) : null,
   };

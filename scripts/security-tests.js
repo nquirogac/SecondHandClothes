@@ -1,6 +1,7 @@
 import assert from "node:assert";
 
 const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:3000";
+const RUN_ID = Date.now();
 
 function formatPayload(payload) {
   return JSON.stringify(payload, null, 2);
@@ -92,7 +93,9 @@ async function runTests() {
     expectBodyError("Debe devolver un error de validación para email inválido."),
   ]);
 
-  await runCase("Registro con XSS en bio", "/api/register", { username: "safe_user", email: "safe@example.com", bio: "<script>alert('xss')</script>" }, [
+  const uniqueUser = `safe_user_${RUN_ID}`;
+  const uniqueEmail = `safe_${RUN_ID}@example.com`;
+  await runCase("Registro con XSS en bio", "/api/register", { username: uniqueUser, email: uniqueEmail, password: "ValidPass1!", bio: "<script>alert('xss')</script>" }, [
     expectStatus(200, "El registro debe aceptar bio sanitizado."),
     expectBodyString("user.bio", "La bio debe ser un string sanitizado."),
     expectBodyNotContain("user.bio", "<script>", "La bio no debe contener etiquetas <script>."),
