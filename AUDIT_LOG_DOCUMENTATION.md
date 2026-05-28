@@ -84,3 +84,35 @@ Añade el paquete al `package.json` y usa uno de estos comandos:
 El archivo `audit.log` se crea automáticamente en la raíz del proyecto cuando el servidor registra la primera entrada.
 
 Si decides desplegar en producción, también puedes cambiar el servicio de auditoría para usar una base de datos o un almacenamiento centralizado en lugar de un archivo local.
+
+## Protección contra fuerza bruta
+
+Se añadió una capa básica de defensa en el endpoint de login para limitar intentos repetidos.
+
+### Archivos modificados
+
+- `src/services/bruteForceProtection.ts`
+  - Nuevo servicio que gestiona intentos fallidos en memoria.
+  - Limita a 5 intentos fallidos en una ventana de 15 minutos.
+  - Bloquea el origen 15 minutos si se excede el límite.
+  - Usa una clave basada en `username`, `email`, `userId` o la dirección IP.
+
+- `server.ts`
+  - Se importaron `getLoginKey`, `isLoginBlocked`, `recordLoginFailure` y `recordLoginSuccess`.
+  - Antes de procesar un login, se comprueba si hay bloqueo activo.
+  - Si el bloqueo está activo, el endpoint responde con `429 Too Many Requests`.
+  - Si el login tiene éxito, se borra el conteo de fallos.
+  - Si el login falla, se incrementa el contador de fallos y se actualiza el estado de bloqueo.
+
+### Por qué
+
+La protección contra fuerza bruta reduce el riesgo de que un atacante pruebe muchas combinaciones de credenciales rápidamente. Esta implementación es una defensa básica y útil para entornos de desarrollo o demostración.
+
+### Qué registra la auditoría
+
+Además de las entradas de inicio de sesión habituales, ahora también se registran:
+
+- `login.rate-limited`
+- `login.failed` con conteo de intentos y tiempo de reintento recomendado
+
+Esto facilita revisar cuándo se activó el límite y qué usuarios o IPs lo generaron.

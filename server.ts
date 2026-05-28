@@ -6,6 +6,7 @@ import { validateLogin, validateRegister, validateCreateItem, validateComment, v
 import { sanitizeBody } from "./src/middleware/sanitizer";
 import { validatePasswordStrength, hashPassword, verifyPassword } from "./src/services/passwordService";
 import { appendAuditLog } from "./src/services/auditLog";
+import { getLoginKey, isLoginBlocked, recordLoginFailure, recordLoginSuccess } from "./src/services/bruteForceProtection";
 
 async function startServer() {
   const app = express();
@@ -258,12 +259,28 @@ async function startServer() {
 
   app.post("/api/login", validateLogin, sanitizeBody(), (req, res) => {
     const { userId, username, email } = req.body;
+    const loginKey = getLoginKey(username, email, userId, req.ip);
+    const blockStatus = isLoginBlocked(loginKey);
+
+    if (blockStatus.blocked) {
+      void appendAuditLog("login.rate-limited", {
+        loginKey,
+        retryAfter: blockStatus.retryAfter,
+      }).catch((err) => console.error("Audit log write failed:", err));
+      return res.status(429).json({
+        success: false,
+        error: "Demasiados intentos de inicio de sesión. Intenta de nuevo más tarde.",
+        retryAfter: blockStatus.retryAfter,
+      });
+    }
+
     const foundUser = users.find(
       (u) => u.id === userId || u.username === username || u.email === email,
     );
 
     if (foundUser) {
       currentUser = foundUser;
+      recordLoginSuccess(loginKey);
       void appendAuditLog("login.success", {
         userId: foundUser.id,
         username: foundUser.username,
@@ -286,6 +303,7 @@ async function startServer() {
       };
       users.push(newUser);
       currentUser = newUser;
+      recordLoginSuccess(loginKey);
       void appendAuditLog("login.auto-created", {
         userId: newUser.id,
         username: newUser.username,
@@ -294,11 +312,27 @@ async function startServer() {
       return res.json({ success: true, user: currentUser });
     }
 
+    const failureStatus = recordLoginFailure(loginKey);
     void appendAuditLog("login.failed", {
       attemptedUsername: username || null,
       attemptedEmail: email || null,
+      blocked: failureStatus.blocked,
+      attempts: failureStatus.attempts,
+      retryAfter: failureStatus.retryAfter,
     }).catch((err) => console.error("Audit log write failed:", err));
-    res.status(400).json({ success: false, error: "Invalid login credentials" });
+
+    const response = {
+      success: false,
+      error: "Invalid login credentials",
+    } as { success: false; error: string; retryAfter?: number };
+
+    if (failureStatus.blocked) {
+      response.error = "Demasiados intentos de inicio de sesión. Intenta de nuevo más tarde.";
+      response.retryAfter = failureStatus.retryAfter ?? undefined;
+      return res.status(429).json(response);
+    }
+
+    res.status(400).json(response);
   });
 
   app.post("/api/register", validateRegister, sanitizeBody(), async (req, res) => {
