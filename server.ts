@@ -5,6 +5,8 @@ import { User, ClothingItem, Comment, ChatMessage } from "./src/types";
 import { validateLogin, validateRegister, validateCreateItem, validateComment, validateChat } from "./src/middleware/inputValidation";
 import { sanitizeBody } from "./src/middleware/sanitizer";
 import { validatePasswordStrength, hashPassword, verifyPassword } from "./src/services/passwordService";
+import { appendAuditLog } from "./src/services/auditLog";
+import { getLoginKey, isLoginBlocked, recordLoginFailure, recordLoginSuccess } from "./src/services/bruteForceProtection";
 
 async function startServer() {
   const app = express();
@@ -257,12 +259,33 @@ async function startServer() {
 
   app.post("/api/login", validateLogin, sanitizeBody(), (req, res) => {
     const { userId, username, email } = req.body;
+    const loginKey = getLoginKey(username, email, userId, req.ip);
+    const blockStatus = isLoginBlocked(loginKey);
+
+    if (blockStatus.blocked) {
+      void appendAuditLog("login.rate-limited", {
+        loginKey,
+        retryAfter: blockStatus.retryAfter,
+      }).catch((err) => console.error("Audit log write failed:", err));
+      return res.status(429).json({
+        success: false,
+        error: "Demasiados intentos de inicio de sesión. Intenta de nuevo más tarde.",
+        retryAfter: blockStatus.retryAfter,
+      });
+    }
+
     const foundUser = users.find(
       (u) => u.id === userId || u.username === username || u.email === email,
     );
 
     if (foundUser) {
       currentUser = foundUser;
+      recordLoginSuccess(loginKey);
+      void appendAuditLog("login.success", {
+        userId: foundUser.id,
+        username: foundUser.username,
+        source: "login",
+      }).catch((err) => console.error("Audit log write failed:", err));
       return res.json({ success: true, user: currentUser });
     }
 
@@ -280,10 +303,36 @@ async function startServer() {
       };
       users.push(newUser);
       currentUser = newUser;
+      recordLoginSuccess(loginKey);
+      void appendAuditLog("login.auto-created", {
+        userId: newUser.id,
+        username: newUser.username,
+        email: newUser.email,
+      }).catch((err) => console.error("Audit log write failed:", err));
       return res.json({ success: true, user: currentUser });
     }
 
-    res.status(400).json({ success: false, error: "Invalid login credentials" });
+    const failureStatus = recordLoginFailure(loginKey);
+    void appendAuditLog("login.failed", {
+      attemptedUsername: username || null,
+      attemptedEmail: email || null,
+      blocked: failureStatus.blocked,
+      attempts: failureStatus.attempts,
+      retryAfter: failureStatus.retryAfter,
+    }).catch((err) => console.error("Audit log write failed:", err));
+
+    const response = {
+      success: false,
+      error: "Invalid login credentials",
+    } as { success: false; error: string; retryAfter?: number };
+
+    if (failureStatus.blocked) {
+      response.error = "Demasiados intentos de inicio de sesión. Intenta de nuevo más tarde.";
+      response.retryAfter = failureStatus.retryAfter ?? undefined;
+      return res.status(429).json(response);
+    }
+
+    res.status(400).json(response);
   });
 
   app.post("/api/register", validateRegister, sanitizeBody(), async (req, res) => {
@@ -334,6 +383,12 @@ async function startServer() {
     users.push(newUser);
     currentUser = newUser;
 
+    void appendAuditLog("register.success", {
+      userId: newUser.id,
+      username: newUser.username,
+      email: newUser.email,
+    }).catch((err) => console.error("Audit log write failed:", err));
+
     // Devolver el usuario SIN mostrar el hash
     res.json({
       success: true,
@@ -380,6 +435,12 @@ async function startServer() {
     };
 
     clothingItems.unshift(newItem);
+    void appendAuditLog("item.created", {
+      itemId: newItem.id,
+      sellerId: currentUser.id,
+      sellerName: currentUser.username,
+      title: newItem.title,
+    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, item: newItem });
   });
 
@@ -425,6 +486,12 @@ async function startServer() {
     };
 
     item.comments.push(newComment);
+    void appendAuditLog("item.comment", {
+      itemId: id,
+      commentId: newComment.id,
+      userId: currentUser.id,
+      username: currentUser.username,
+    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, comment: newComment });
   });
 
@@ -441,6 +508,13 @@ async function startServer() {
     }
 
     item.status = "sold";
+    void appendAuditLog("item.purchased", {
+      itemId: item.id,
+      buyerId: currentUser.id,
+      buyerName: currentUser.username,
+      sellerId: item.sellerId,
+      sellerName: item.sellerName,
+    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, item });
   });
 
@@ -468,6 +542,13 @@ async function startServer() {
     };
 
     chatMessages.push(newChat);
+    void appendAuditLog("chat.sent", {
+      chatId: newChat.id,
+      itemId: newChat.itemId,
+      senderId: newChat.senderId,
+      senderName: newChat.senderName,
+      receiverId: newChat.receiverId,
+    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, chat: newChat });
   });
 
