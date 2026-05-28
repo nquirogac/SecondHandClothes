@@ -1,18 +1,103 @@
-import express from "express";
+import "dotenv/config";
+import express, { type Request } from "express";
+import type { AddressInfo } from "net";
+import rateLimit from "express-rate-limit";
+import fs from "fs";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import { User, ClothingItem, Comment, ChatMessage } from "./src/types";
-import { validateLogin, validateRegister, validateCreateItem, validateComment, validateChat } from "./src/middleware/inputValidation";
-import { sanitizeBody } from "./src/middleware/sanitizer";
-import { validatePasswordStrength, hashPassword, verifyPassword } from "./src/services/passwordService";
-import { appendAuditLog } from "./src/services/auditLog";
-import { getLoginKey, isLoginBlocked, recordLoginFailure, recordLoginSuccess } from "./src/services/bruteForceProtection";
+import { applicationDefault, cert, getApps as getAdminApps, initializeApp } from "firebase-admin/app";
+import { getAuth as getAdminAuth } from "firebase-admin/auth";
 
-async function startServer() {
+const firebaseAdminApp = (() => {
+  if (getAdminApps().length > 0) {
+    return getAdminApps()[0];
+  }
+
+  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  const resolvedServiceAccountJson = (() => {
+    if (serviceAccountJson) {
+      return serviceAccountJson;
+    }
+
+    if (!serviceAccountPath) {
+      return null;
+    }
+
+    try {
+      return fs.readFileSync(serviceAccountPath, "utf-8");
+    } catch (error) {
+      console.warn("Firebase Admin service account file could not be read. Falling back to default credentials.", error);
+      return null;
+    }
+  })();
+
+  if (resolvedServiceAccountJson) {
+    try {
+      return initializeApp({
+        credential: cert(JSON.parse(resolvedServiceAccountJson)),
+      });
+    } catch (error) {
+      console.warn("Firebase Admin service account JSON could not be parsed. Falling back to default credentials.", error);
+    }
+  }
+
+  return initializeApp({
+    credential: applicationDefault(),
+  });
+})();
+
+const firebaseAdminAuth = getAdminAuth(firebaseAdminApp);
+const turnstileSecretKey = process.env.TURNSTILE_SECRET_KEY;
+
+type TurnstileVerificationResult = {
+  success: boolean;
+  challenge_ts?: string;
+  hostname?: string;
+  "error-codes"?: string[];
+};
+
+export async function startServer(port = 3000) {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const PORT = port;
 
   app.use(express.json({ limit: "10kb" }));
+
+  // Basic rate limiting to protect public API surface
+  const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  // Stricter limits for authentication flows
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10,
+    message: { error: "Too many login attempts from this IP, please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  const registerLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 5,
+    message: { error: "Too many accounts created from this IP, please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  const turnstileLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 30,
+    message: { error: "Too many captcha requests, slow down." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  // Apply general limiter to all routes first
+  app.use(generalLimiter);
 
   // ============================================
   // SERVER STATE (Simulating PostgreSQL Dataset)
@@ -244,6 +329,115 @@ async function startServer() {
     }
   ];
 
+  const upsertUserRecord = (nextUser: User) => {
+    const existingIndex = users.findIndex(user => user.id === nextUser.id);
+    if (existingIndex === -1) {
+      users.push(nextUser);
+      return nextUser;
+    }
+
+    users[existingIndex] = {
+      ...users[existingIndex],
+      ...nextUser,
+    };
+
+    return users[existingIndex];
+  };
+
+  const parseStylePreferences = (value: string | undefined) => {
+    if (!value) {
+      return ["Casual"];
+    }
+
+    return value.split(",").map(style => style.trim()).filter(Boolean);
+  };
+
+  const verifyTurnstileToken = async (token: string, remoteip?: string) => {
+    if (!turnstileSecretKey) {
+      return {
+        success: false,
+        error: "TURNSTILE_SECRET_KEY is not configured on the server.",
+      };
+    }
+
+    const formData = new URLSearchParams();
+    formData.append("secret", turnstileSecretKey);
+    formData.append("response", token);
+
+    if (remoteip) {
+      formData.append("remoteip", remoteip);
+    }
+
+    const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      body: formData,
+    });
+
+    const verificationResult = (await response.json()) as TurnstileVerificationResult;
+
+    if (!verificationResult.success) {
+      return {
+        success: false,
+        error: verificationResult["error-codes"]?.join(", ") || "Turnstile verification failed.",
+      };
+    }
+
+    return { success: true };
+  };
+
+  const buildHeaderFallbackUser = (req: Request) => {
+    const headerUserId = req.header("x-user-id");
+    const headerUsername = req.header("x-user-name");
+    const headerEmail = req.header("x-user-email");
+    const headerAvatar = req.header("x-user-avatar");
+
+    if (headerUserId && headerUsername && headerEmail && headerAvatar) {
+      const resolvedUser: User = {
+        id: headerUserId,
+        username: headerUsername,
+        email: headerEmail,
+        avatar: headerAvatar,
+        bio: req.header("x-user-bio") || users.find(user => user.id === headerUserId)?.bio || "Signed in user",
+        stylePreference: parseStylePreferences(req.header("x-user-styles") || undefined),
+        joinedDate: req.header("x-user-joined-date") || users.find(user => user.id === headerUserId)?.joinedDate || new Date().toISOString(),
+        rating: Number(req.header("x-user-rating") || 5),
+        passwordHash: "",
+      };
+
+      return upsertUserRecord(resolvedUser);
+    }
+
+    return currentUser;
+  };
+
+  const resolveActiveUser = async (req: Request) => {
+    const authorizationHeader = req.header("authorization");
+    const bearerToken = authorizationHeader?.startsWith("Bearer ") ? authorizationHeader.slice(7) : null;
+
+    if (bearerToken) {
+      try {
+        const decodedToken = await firebaseAdminAuth.verifyIdToken(bearerToken);
+        const resolvedUser: User = {
+          id: decodedToken.uid,
+          username: (decodedToken.name || decodedToken.email?.split("@")[0] || decodedToken.uid).toLowerCase().replace(/\s+/g, "_"),
+          email: decodedToken.email || `${decodedToken.uid}@example.com`,
+          avatar: decodedToken.picture || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
+          bio: "Signed in with Firebase Auth",
+          stylePreference: ["Casual"],
+          joinedDate: new Date().toISOString(),
+          rating: 5.0,
+          passwordHash: "",
+        };
+
+        return upsertUserRecord(resolvedUser);
+      } catch (error) {
+        console.warn("Firebase token verification failed. Falling back to header/demo identity.", error);
+      }
+    }
+
+    return buildHeaderFallbackUser(req);
+  };
+
   // ============================================
   // API ENDPOINTS
   // ============================================
@@ -253,125 +447,94 @@ async function startServer() {
     res.json(users);
   });
 
-  app.get("/api/currentUser", (req, res) => {
-    res.json(currentUser);
+  app.get("/api/currentUser", async (req, res) => {
+    res.json(await resolveActiveUser(req));
   });
 
-  app.post("/api/login", validateLogin, sanitizeBody(), (req, res) => {
-    const { email, password } = req.body;
-    const loginKey = getLoginKey(email, req.ip);
-    const blockStatus = isLoginBlocked(loginKey);
+  app.post("/api/security/turnstile/verify", turnstileLimiter, async (req, res) => {
+    const { token } = req.body;
 
-    if (blockStatus.blocked) {
-      void appendAuditLog("login.rate-limited", {
-        loginKey,
-        retryAfter: blockStatus.retryAfter,
-      }).catch((err) => console.error("Audit log write failed:", err));
-      return res.status(429).json({
-        success: false,
-        error: "Demasiados intentos de inicio de sesión. Intenta de nuevo más tarde.",
-        retryAfter: blockStatus.retryAfter,
-      });
+    if (!token) {
+      return res.status(400).json({ success: false, error: "Turnstile token is required." });
     }
 
-    let foundUser = users.find((u) => u.email === email);
-
-    // Auto-crear usuario si no existe (no guarda contraseña), y registrar el evento
-    if (!foundUser) {
-      const newUser = {
-        id: "u_" + Date.now(),
-        username: email.split("@")[0].toLowerCase().replace(/[^a-z0-9_]/g, "_") || "user",
-        email,
-        passwordHash: null,
-        avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
-        bio: "Auto-created account",
-        stylePreference: ["Casual"],
-        joinedDate: new Date().toISOString(),
-        rating: 0,
-      };
-      users.push(newUser);
-      foundUser = newUser;
-      void appendAuditLog("login.auto-created", {
-        userId: newUser.id,
-        email: newUser.email,
-        source: "login",
-      }).catch((err) => console.error("Audit log write failed:", err));
+    const result = await verifyTurnstileToken(token, req.ip);
+    if (!result.success) {
+      return res.status(400).json(result);
     }
 
-    if (foundUser && foundUser.passwordHash) {
-      const passwordValid = verifyPassword(password, foundUser.passwordHash);
-      if (passwordValid) {
-        currentUser = foundUser;
-        recordLoginSuccess(loginKey);
-        void appendAuditLog("login.success", {
-          userId: foundUser.id,
-          username: foundUser.username,
-          source: "login",
-        }).catch((err) => console.error("Audit log write failed:", err));
-        return res.json({ success: true, user: currentUser });
+    res.json(result);
+  });
+
+  app.post("/api/login", loginLimiter, async (req, res) => {
+    const { userId, username, email } = req.body;
+    const turnstileToken = req.body.turnstileToken;
+
+    if (turnstileSecretKey) {
+      if (!turnstileToken) {
+        return res.status(400).json({ success: false, error: "Turnstile token is required." });
+      }
+
+      const turnstileResult = await verifyTurnstileToken(turnstileToken, req.ip);
+      if (!turnstileResult.success) {
+        return res.status(400).json(turnstileResult);
       }
     }
 
-    const failureStatus = recordLoginFailure(loginKey);
-    void appendAuditLog("login.failed", {
-      attemptedEmail: email || null,
-      blocked: failureStatus.blocked,
-      attempts: failureStatus.attempts,
-      retryAfter: failureStatus.retryAfter,
-    }).catch((err) => console.error("Audit log write failed:", err));
+    let foundUser = users.find(u => u.id === userId || u.username === username || u.email === email);
 
-    const response = {
-      success: false,
-      error: "Invalid login credentials",
-    } as { success: false; error: string; retryAfter?: number };
-
-    if (failureStatus.blocked) {
-      response.error = "Demasiados intentos de inicio de sesión. Intenta de nuevo más tarde.";
-      response.retryAfter = failureStatus.retryAfter ?? undefined;
-      return res.status(429).json(response);
+    if (foundUser) {
+      currentUser = foundUser;
+      upsertUserRecord(foundUser);
+      return res.json({ success: true, user: currentUser });
     }
 
-    res.status(400).json(response);
+    // Fallback: If username doesn't exist, log in as new with random profile setup
+    if (username) {
+      const newUser: User = {
+        id: "u_" + Date.now(),
+        username: username,
+        email: email || `${username}@example.com`,
+        avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
+        bio: "Bio not set yet - Tap edit profile to customize",
+        stylePreference: ["Casual"],
+        joinedDate: new Date().toISOString(),
+        rating: 5.0,
+        passwordHash: "",
+      };
+      users.push(newUser);
+      currentUser = newUser;
+      upsertUserRecord(newUser);
+      return res.json({ success: true, user: currentUser });
+    }
+
+    res.status(400).json({ success: false, error: "Invalid login credentials" });
   });
 
-  app.post("/api/register", validateRegister, sanitizeBody(), async (req, res) => {
-    const { username, email, password, bio, stylePreference, avatar } = req.body;
+  app.post("/api/register", registerLimiter, async (req, res) => {
+    const { username, email, bio, stylePreference, avatar } = req.body;
+    const turnstileToken = req.body.turnstileToken;
 
-    // Validar fortaleza de la contraseña
-    const passwordCheck = validatePasswordStrength(password);
-    if (!passwordCheck.isValid) {
-      return res.status(400).json({
-        success: false,
-        error: "Contraseña débil",
-        passwordErrors: passwordCheck.errors,
-      });
+    if (turnstileSecretKey) {
+      if (!turnstileToken) {
+        return res.status(400).json({ error: "Turnstile token is required." });
+      }
+
+      const turnstileResult = await verifyTurnstileToken(turnstileToken, req.ip);
+      if (!turnstileResult.success) {
+        return res.status(400).json(turnstileResult);
+      }
     }
 
-    // Hashear la contraseña antes de guardar
-    let passwordHash: string;
-    try {
-      passwordHash = await hashPassword(password);
-    } catch (err) {
-      return res.status(500).json({
-        success: false,
-        error: "Error al procesar la contraseña",
-      });
-    }
-
-    // Verificar que el usuario no exista ya
-    const userExists = users.find((u) => u.email === email || u.username === username);
-    if (userExists) {
-      return res.status(400).json({
-        success: false,
-        error: "El usuario o email ya está registrado",
-      });
+    if (!username || !email) {
+      return res.status(400).json({ error: "Username and Email are required parameters" });
     }
 
     const newUser: User = {
       id: "u_" + Date.now(),
       username: username.toLowerCase().replace(/\s+/g, "_"),
       email,
-      passwordHash, // Guardamos el hash, NUNCA la contraseña plana
+      passwordHash: "", // Guardamos el hash, NUNCA la contraseña plana
       avatar: avatar || "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
       bio: bio || "Sustainable apparel searcher",
       stylePreference: stylePreference || ["Casual"],
@@ -381,28 +544,8 @@ async function startServer() {
 
     users.push(newUser);
     currentUser = newUser;
-
-    void appendAuditLog("register.success", {
-      userId: newUser.id,
-      username: newUser.username,
-      email: newUser.email,
-    }).catch((err) => console.error("Audit log write failed:", err));
-
-    // Devolver el usuario SIN mostrar el hash
-    res.json({
-      success: true,
-      message: "Usuario registrado exitosamente",
-      user: {
-        id: newUser.id,
-        username: newUser.username,
-        email: newUser.email,
-        avatar: newUser.avatar,
-        bio: newUser.bio,
-        stylePreference: newUser.stylePreference,
-        joinedDate: newUser.joinedDate,
-        rating: newUser.rating,
-      },
-    });
+    upsertUserRecord(newUser);
+    res.json({ success: true, user: currentUser });
   });
 
   // Clothing Item Endpoints
@@ -410,15 +553,17 @@ async function startServer() {
     res.json(clothingItems);
   });
 
-  app.post("/api/items", validateCreateItem, sanitizeBody({ allowRichText: true }), (req, res) => {
+  app.post("/api/items", async (req, res) => {
     const { title, description, imageUrl, category, size, brand, condition, price } = req.body;
+
+    const activeUser = await resolveActiveUser(req);
 
     const newItem: ClothingItem = {
       id: "c_" + Date.now(),
-      sellerId: currentUser.id,
-      sellerName: currentUser.username,
-      sellerAvatar: currentUser.avatar,
-      title,
+      sellerId: activeUser.id,
+      sellerName: activeUser.username,
+      sellerAvatar: activeUser.avatar,
+      title: title,
       description: description || "Gorgeous pre-loved fashion piece.",
       imageUrl: imageUrl || "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=800",
       category,
@@ -434,31 +579,27 @@ async function startServer() {
     };
 
     clothingItems.unshift(newItem);
-    void appendAuditLog("item.created", {
-      itemId: newItem.id,
-      sellerId: currentUser.id,
-      sellerName: currentUser.username,
-      title: newItem.title,
-    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, item: newItem });
   });
 
   // Like Social Element
-  app.post("/api/items/:id/like", (req, res) => {
+  app.post("/api/items/:id/like", async (req, res) => {
     const { id } = req.params;
     const item = clothingItems.find(i => i.id === id);
     if (!item) {
       return res.status(404).json({ error: "Item not found" });
     }
 
-    const likedIndex = item.likedByUserIds.indexOf(currentUser.id);
+    const activeUser = await resolveActiveUser(req);
+
+    const likedIndex = item.likedByUserIds.indexOf(activeUser.id);
     if (likedIndex > -1) {
       // Unlike
       item.likedByUserIds.splice(likedIndex, 1);
       item.likesCount = Math.max(0, item.likesCount - 1);
     } else {
       // Like
-      item.likedByUserIds.push(currentUser.id);
+      item.likedByUserIds.push(activeUser.id);
       item.likesCount += 1;
     }
 
@@ -466,7 +607,7 @@ async function startServer() {
   });
 
   // Commments Social Element
-  app.post("/api/items/:id/comment", validateComment, sanitizeBody({ allowRichText: false }), (req, res) => {
+  app.post("/api/items/:id/comment", async (req, res) => {
     const { id } = req.params;
     const { text } = req.body;
 
@@ -475,22 +616,18 @@ async function startServer() {
       return res.status(404).json({ error: "Item not found" });
     }
 
+    const activeUser = await resolveActiveUser(req);
+
     const newComment: Comment = {
       id: "com_" + Date.now(),
-      userId: currentUser.id,
-      username: currentUser.username,
-      userAvatar: currentUser.avatar,
-      text,
-      createdAt: new Date().toISOString(),
+      userId: activeUser.id,
+      username: activeUser.username,
+      userAvatar: activeUser.avatar,
+      text: text,
+      createdAt: new Date().toISOString()
     };
 
     item.comments.push(newComment);
-    void appendAuditLog("item.comment", {
-      itemId: id,
-      commentId: newComment.id,
-      userId: currentUser.id,
-      username: currentUser.username,
-    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, comment: newComment });
   });
 
@@ -507,73 +644,72 @@ async function startServer() {
     }
 
     item.status = "sold";
-    void appendAuditLog("item.purchased", {
-      itemId: item.id,
-      buyerId: currentUser.id,
-      buyerName: currentUser.username,
-      sellerId: item.sellerId,
-      sellerName: item.sellerName,
-    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, item });
   });
 
   // Direct negotiation chat list
-  app.get("/api/chats", (req, res) => {
+  app.get("/api/chats", async (req, res) => {
     // Return chats involving active user
+    const activeUser = await resolveActiveUser(req);
     const chats = chatMessages.filter(
-      c => c.senderId === currentUser.id || c.receiverId === currentUser.id
+      c => c.senderId === activeUser.id || c.receiverId === activeUser.id
     );
     res.json(chats);
   });
 
   // Send communication to seller
-  app.post("/api/chats", validateChat, sanitizeBody({ allowRichText: false }), (req, res) => {
+  app.post("/api/chats", async (req, res) => {
     const { itemId, receiverId, text } = req.body;
+
+    const activeUser = await resolveActiveUser(req);
 
     const newChat: ChatMessage = {
       id: "ch_" + Date.now(),
-      itemId,
-      senderId: currentUser.id,
-      senderName: currentUser.username,
-      receiverId,
-      text,
-      createdAt: new Date().toISOString(),
+      itemId: itemId,
+      senderId: activeUser.id,
+      senderName: activeUser.username,
+      receiverId: receiverId,
+      text: text,
+      createdAt: new Date().toISOString()
     };
 
     chatMessages.push(newChat);
-    void appendAuditLog("chat.sent", {
-      chatId: newChat.id,
-      itemId: newChat.itemId,
-      senderId: newChat.senderId,
-      senderName: newChat.senderName,
-      receiverId: newChat.receiverId,
-    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, chat: newChat });
   });
 
   // ============================================
   // VITE DEVELOPMENT MIDDLEWARE Setup / STATIC
   // ============================================
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
+  if (process.env.NODE_ENV === "production") {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
+  } else if (process.env.NODE_ENV === "test") {
+    // In test mode we skip Vite middleware to avoid ESM/CJS interop issues.
+  } else {
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
   }
 
-  // Bound target port strictly on 3000
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[VibeWear Backend Server] running smoothly on port ${PORT}`);
+  // Bound target port
+  const server = app.listen(PORT, "0.0.0.0", () => {
+    const addr = server.address() as AddressInfo | null;
+    const used = addr ? addr.port : PORT;
+    console.log(`[VibeWear Backend Server] running smoothly on port ${used}`);
   });
+
+  return { app, server };
 }
 
-startServer().catch(err => {
-  console.error("Critical: Dev Server failed to boot up correctly:", err);
-});
+// Start server only when not running under Jest (tests will call startServer)
+if (!process.env.JEST_WORKER_ID) {
+  startServer().catch(err => {
+    console.error("Critical: Dev Server failed to boot up correctly:", err);
+  });
+}

@@ -1,82 +1,133 @@
-import React, { useState } from "react";
-import { X, Mail, ShieldAlert, Sparkles, Check, RefreshCw, Lock } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { Mail, ShieldAlert, Check, Lock, Chrome, BadgeCheck } from "lucide-react";
 import { User } from "../types";
+import { LoginRequest } from "../lib/auth";
+import { turnstileSiteKey } from "../lib/firebase";
 
 interface LoginModalProps {
   onClose: () => void;
-  onLogin: (credentials: { email: string; password: string }) => Promise<void>;
+  onLogin: (credentials: LoginRequest) => Promise<void> | void;
   currentUser: User | null;
-  usersList: User[];
+  firebaseConfigured: boolean;
+  loginError: string | null;
+  canClose: boolean;
 }
 
 export default function LoginModal({
   onClose,
   onLogin,
   currentUser,
-  usersList
+  firebaseConfigured,
+  loginError,
+  canClose,
 }: LoginModalProps) {
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
+  const [displayNameInput, setDisplayNameInput] = useState("");
+  const [firebaseAction, setFirebaseAction] = useState<"signIn" | "register">("signIn");
   const [submitSuccess, setSubmitSuccess] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileError, setTurnstileError] = useState<string | null>(null);
+  const turnstileRef = useRef<HTMLDivElement | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!emailInput || !passwordInput) {
-      alert("Por favor ingresa tu email y contraseña.");
+  useEffect(() => {
+    if (!firebaseConfigured || !turnstileSiteKey || !turnstileRef.current) {
       return;
     }
-    setIsLoading(true);
-    try {
-      await onLogin({
-        email: emailInput,
-        password: passwordInput
-      });
-      setSubmitSuccess(true);
-      setTimeout(() => {
-        setIsLoading(false);
-        onClose();
-      }, 1200);
-    } catch (err) {
-      setIsLoading(false);
-    }
-  };
 
-  const handleSwitchAccount = async (user: User) => {
-    // For quick switch, we need to know the password for demo users
-    // All demo users have the same password for testing
-    const demoPassword = "password123";
-    try {
-      await onLogin({ email: user.email, password: demoPassword });
-      alert(`Switched active profile to @${user.username}!`);
-      onClose();
-    } catch (err) {
-      // Error already shown
+    const scriptId = "cloudflare-turnstile-script";
+    const renderWidget = () => {
+      const turnstile = (window as Window & { turnstile?: any }).turnstile;
+      if (!turnstile || !turnstileRef.current) {
+        return;
+      }
+
+      turnstileRef.current.innerHTML = "";
+      turnstile.render(turnstileRef.current, {
+        sitekey: turnstileSiteKey,
+        theme: "light",
+        callback: (token: string) => {
+          setTurnstileToken(token);
+          setTurnstileError(null);
+        },
+        "expired-callback": () => setTurnstileToken(""),
+        "error-callback": () => {
+          setTurnstileToken("");
+          setTurnstileError("No se pudo cargar el captcha. Reintenta o revisa la clave Turnstile.");
+        },
+      });
+    };
+
+    const existingScript = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (existingScript) {
+      if ((window as Window & { turnstile?: any }).turnstile) {
+        renderWidget();
+      } else {
+        existingScript.addEventListener("load", renderWidget, { once: true });
+      }
+      return;
     }
+
+    const script = document.createElement("script");
+    script.id = scriptId;
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.defer = true;
+    script.onload = renderWidget;
+    document.body.appendChild(script);
+  }, [firebaseConfigured]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    void (async () => {
+      try {
+        await onLogin({
+          provider: "firebase",
+          action: firebaseAction,
+          email: emailInput,
+          password: passwordInput,
+          displayName: displayNameInput,
+          turnstileToken,
+        });
+        setSubmitSuccess(true);
+        setTimeout(() => {
+          onClose();
+        }, 1200);
+      } catch (error) {
+        setTurnstileError(error instanceof Error ? error.message : "No se pudo iniciar sesión.");
+      }
+    })();
   };
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-100 p-6 md:p-8 space-y-6">
-        
-        {/* Header Title */}
         <div className="flex items-center justify-between pb-4 border-b border-slate-150">
           <div className="flex items-center space-x-2">
             <Mail className="text-indigo-650" size={22} />
             <div>
-              <h3 className="font-extrabold text-slate-850 text-lg leading-tight">Switch / Join Member Profile</h3>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Simulate multi-user social actions</p>
+              <h3 className="font-extrabold text-slate-850 text-lg leading-tight">Accede a tu cuenta</h3>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Solo autenticación Firebase</p>
             </div>
           </div>
           <button
-            onClick={onClose}
-            className="p-1 px-3 border border-slate-200 text-slate-400 hover:text-slate-800 rounded-lg text-xs font-bold transition-all cursor-pointer"
+            onClick={() => {
+              if (canClose) {
+                onClose();
+              }
+            }}
+            disabled={!canClose}
+            className={`p-1 px-3 border rounded-lg text-xs font-bold transition-all ${
+              canClose
+                ? "border-slate-200 text-slate-400 hover:text-slate-800 cursor-pointer"
+                : "border-slate-100 text-slate-300 cursor-not-allowed"
+            }`}
           >
-            Cancel
+            {canClose ? "Cerrar" : "Inicio de sesión obligatorio"}
           </button>
         </div>
 
-        {/* Current status info */}
         {currentUser && (
           <div className="p-3.5 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-between leading-none">
             <div className="flex items-center space-x-2.5">
@@ -96,23 +147,49 @@ export default function LoginModal({
           </div>
         )}
 
-        {/* Form to connect as new user */}
+        {(loginError || turnstileError) && (
+          <div className="p-3 rounded-2xl bg-rose-50 border border-rose-100 text-rose-700 text-xs font-semibold leading-relaxed">
+            {loginError || turnstileError}
+          </div>
+        )}
+
         {submitSuccess ? (
           <div className="p-8 text-center bg-emerald-50 rounded-2xl border border-emerald-150 space-y-2">
             <Check size={28} className="mx-auto text-emerald-500 animate-bounce" />
-            <h4 className="text-sm font-bold text-emerald-900">¡Inicio de sesión exitoso!</h4>
-            <p className="text-xs text-emerald-705">Sincronizando datos de tu perfil...</p>
+              <h4 className="text-sm font-bold text-emerald-900">Sesión iniciada correctamente</h4>
+            <p className="text-xs text-emerald-705">Sincronizando tu sesión autenticada...</p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => setFirebaseAction("signIn")}
+                className={`py-2 rounded-xl text-xs font-bold transition-all ${
+                  firebaseAction === "signIn" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+                }`}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={() => setFirebaseAction("register")}
+                className={`py-2 rounded-xl text-xs font-bold transition-all ${
+                  firebaseAction === "register" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500"
+                }`}
+              >
+                Create account
+              </button>
+            </div>
+
             <div>
               <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                Email *
+                Correo
               </label>
               <input
                 type="email"
                 required
-                placeholder="ejemplo@email.com"
+                placeholder="correo@ejemplo.com"
                 className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
@@ -121,74 +198,81 @@ export default function LoginModal({
 
             <div>
               <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                Contraseña *
+                Contraseña
               </label>
               <input
                 type="password"
                 required
-                placeholder="Ingresa tu contraseña"
+                placeholder="••••••••"
                 className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
                 value={passwordInput}
                 onChange={(e) => setPasswordInput(e.target.value)}
               />
             </div>
 
-            <div className="flex justify-end pt-2">
+            {firebaseAction === "register" && (
+              <div>
+                <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
+                  Nombre visible
+                </label>
+                <input
+                  type="text"
+                  placeholder="Nombre público"
+                  className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
+                  value={displayNameInput}
+                  onChange={(e) => setDisplayNameInput(e.target.value)}
+                />
+              </div>
+            )}
+
+            {turnstileSiteKey ? (
+              <div>
+                <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
+                  Desafío de seguridad
+                </label>
+                <div ref={turnstileRef} className="min-h-19.5" />
+              </div>
+            ) : (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-100 text-amber-700 text-[11px] font-semibold leading-relaxed">
+                Turnstile no está configurado. Define `VITE_TURNSTILE_SITE_KEY` para habilitar el captcha.
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-2">
+                <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    setSubmitSuccess(false);
+                    await onLogin({ provider: "firebase", action: "google", turnstileToken });
+                    setSubmitSuccess(true);
+                    setTimeout(onClose, 1200);
+                  } catch (error) {
+                    setTurnstileError(error instanceof Error ? error.message : "No se pudo usar Google.");
+                  }
+                }}
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer active:scale-95 flex items-center justify-center space-x-2"
+              >
+                <Chrome size={14} />
+                <span>Google</span>
+              </button>
               <button
                 type="submit"
-                disabled={isLoading}
-                className="w-full px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-indigo-100 transition-all cursor-pointer active:scale-95"
+                className="w-full px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-lg shadow-indigo-100 transition-all cursor-pointer active:scale-95 flex items-center justify-center space-x-2"
               >
-                {isLoading ? "Iniciando sesión..." : "Iniciar Sesión"}
+                <BadgeCheck size={14} />
+                <span>{firebaseAction === "register" ? "Crear cuenta" : "Iniciar sesión"}</span>
               </button>
             </div>
           </form>
         )}
 
-        {/* Testing Multi-user Switch Panel */}
-        <div className="space-y-3 pt-4 border-t border-slate-150">
-          <div className="flex items-center space-x-1.5 text-slate-700 font-bold">
-            <RefreshCw size={14} className="text-indigo-650" />
-            <h4 className="text-xs uppercase tracking-wider text-slate-700">Simulate Social Testing Nodes</h4>
-          </div>
-          
-          <p className="text-[11px] text-slate-400 leading-normal font-sans">
-            Switch between different aesthetic catalog creators below to post comments on clothes, like each other's lists, or test direct chat negotiation exchanges!
-          </p>
-
-          <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto no-scrollbar">
-            {usersList.map((user) => {
-              const isSelected = currentUser?.id === user.id;
-              return (
-                <button
-                  key={user.id}
-                  disabled={isSelected}
-                  onClick={() => handleSwitchAccount(user)}
-                  className={`p-2 rounded-xl text-left border flex items-center space-x-2 transition-all ${
-                    isSelected
-                      ? "border-emerald-250 bg-emerald-50/40 opacity-70 cursor-not-allowed"
-                      : "border-slate-100 bg-slate-50/50 hover:bg-slate-100/50 cursor-pointer"
-                  }`}
-                >
-                  <img src={user.avatar} className="h-7 w-7 rounded-full object-cover shrink-0" />
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-bold text-slate-800 truncate leading-none">@{user.username}</p>
-                    <p className="text-[9px] text-[#8e8e8e] truncate mt-0.5">{user.stylePreference.slice(0, 2).join(' #')}</p>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* PostgreSQL Security Layer Disclaimer */}
         <div className="p-3 bg-indigo-50 rounded-xl flex items-start space-x-2 text-[10px] text-indigo-905 font-medium leading-relaxed">
           <ShieldAlert size={14} className="shrink-0 mt-0.5" />
           <span>
-            <strong>Architectural Roadmap Notice:</strong> When deploying this to production, you can replace this manual profile-switcher with standard JWT authentication (using bcrypt + passport-jwt on PostgreSQL tables).
+            Firebase Auth protects the identity layer and Turnstile guards the login form.
           </span>
         </div>
-
       </div>
     </div>
   );

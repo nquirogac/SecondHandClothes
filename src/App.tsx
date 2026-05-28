@@ -1,4 +1,12 @@
 import React, { useState, useEffect } from "react";
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  signOut,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  updateProfile,
+} from "firebase/auth";
 import { User, ClothingItem, ChatMessage } from "./types";
 import Navigation from "./components/Navigation";
 import FilterSidebar from "./components/FilterSidebar";
@@ -9,12 +17,16 @@ import ChatInboxModal from "./components/ChatInboxModal";
 import ProfileModal from "./components/ProfileModal";
 import LoginModal from "./components/LoginModal";
 import { Sparkles, ShoppingBag, PlusCircle, Bookmark, Flame, RotateCw, HelpCircle, FileText } from "lucide-react";
+import { buildMarketplaceHeaders, type LoginRequest, firebaseUserToMarketplaceUser, mergeMarketplaceUser } from "./lib/auth";
+import { firebaseAuth, firebaseConfigured, googleProvider, turnstileSiteKey } from "./lib/firebase";
 
 export default function App() {
   const [items, setItems] = useState<ClothingItem[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [chats, setChats] = useState<ChatMessage[]>([]);
+  const [authReady, setAuthReady] = useState(!firebaseConfigured);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   // Filtering states
   const [searchQuery, setSearchQuery] = useState("");
@@ -29,22 +41,54 @@ export default function App() {
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [showInboxModal, setShowInboxModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(true);
   const [showSchemaGuideModal, setShowSchemaGuideModal] = useState(false);
+  const [showLanding, setShowLanding] = useState(true);
 
   // Loading states
   const [isLoading, setIsLoading] = useState(true);
+
+  const getRequestHeaders = () => ({
+    "Content-Type": "application/json",
+    ...buildMarketplaceHeaders(currentUser),
+  });
+
+  const getAuthenticatedRequestHeaders = async () => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...Object.fromEntries(Object.entries(buildMarketplaceHeaders(currentUser)).map(([key, value]) => [key, String(value)])),
+    };
+
+    if (firebaseAuth?.currentUser) {
+      const token = await firebaseAuth.currentUser.getIdToken();
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    return headers;
+  };
+
+  const syncCurrentUser = (nextUser: User | null) => {
+    setCurrentUser(nextUser);
+    if (nextUser) {
+      setUsers((prev) => mergeMarketplaceUser(prev, nextUser));
+    }
+  };
 
   // Fetch initial state nodes from Express
   const fetchData = async () => {
     try {
       setIsLoading(true);
-      const [itemsRes, usersRes, currentUserRes, chatsRes] = await Promise.all([
-        fetch("/api/items"),
-        fetch("/api/users"),
-        fetch("/api/currentUser"),
-        fetch("/api/chats")
-      ]);
+      const authHeaders = await getAuthenticatedRequestHeaders();
+      const requestList = [
+        fetch("/api/items", { headers: authHeaders }),
+        fetch("/api/users", { headers: authHeaders }),
+      ];
+
+      if (currentUser) {
+        requestList.push(fetch("/api/chats", { headers: authHeaders }));
+      }
+
+      const [itemsRes, usersRes, chatsRes] = await Promise.all(requestList);
 
       if (itemsRes.ok) {
         const itemsData = await itemsRes.json();
@@ -61,11 +105,7 @@ export default function App() {
         setUsers(await usersRes.json());
       }
 
-      if (currentUserRes.ok) {
-        setCurrentUser(await currentUserRes.json());
-      }
-
-      if (chatsRes.ok) {
+      if (chatsRes && chatsRes.ok) {
         setChats(await chatsRes.json());
       }
     } catch (err) {
@@ -76,8 +116,36 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchData();
+    if (!firebaseAuth) {
+      setAuthReady(true);
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(firebaseAuth, (firebaseUser) => {
+      if (firebaseUser) {
+        const mappedUser = firebaseUserToMarketplaceUser(firebaseUser);
+        syncCurrentUser(mappedUser);
+      } else {
+        setCurrentUser(null);
+      }
+
+      setAuthReady(true);
+    });
+
+    return unsubscribe;
   }, []);
+
+  useEffect(() => {
+    if (authReady) {
+      fetchData();
+    }
+  }, [authReady, currentUser?.id]);
+
+  useEffect(() => {
+    if (authReady) {
+      setShowLoginModal(!currentUser && !showLanding);
+    }
+  }, [authReady, currentUser, showLanding]);
 
   // Sync active details if list is modified (like/comment updates)
   useEffect(() => {
@@ -97,7 +165,7 @@ export default function App() {
     }
 
     try {
-      const res = await fetch(`/api/items/${itemId}/like`, { method: "POST" });
+      const res = await fetch(`/api/items/${itemId}/like`, { method: "POST", headers: await getAuthenticatedRequestHeaders() });
       if (res.ok) {
         const data = await res.json();
         setItems(prev => prev.map(item => {
@@ -140,7 +208,7 @@ export default function App() {
     try {
       const res = await fetch(`/api/items/${itemId}/comment`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await getAuthenticatedRequestHeaders(),
         body: JSON.stringify({ text })
       });
       if (res.ok) {
@@ -187,7 +255,7 @@ export default function App() {
     try {
       const res = await fetch("/api/chats", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await getAuthenticatedRequestHeaders(),
         body: JSON.stringify({ itemId, receiverId, text })
       });
       if (res.ok) {
@@ -217,7 +285,7 @@ export default function App() {
     }
 
     try {
-      const res = await fetch(`/api/items/${itemId}/buy`, { method: "POST" });
+      const res = await fetch(`/api/items/${itemId}/buy`, { method: "POST", headers: await getAuthenticatedRequestHeaders() });
       if (res.ok) {
         setItems(prev => prev.map(item => {
           if (item.id === itemId) {
@@ -247,7 +315,7 @@ export default function App() {
     try {
       const res = await fetch("/api/items", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await getAuthenticatedRequestHeaders(),
         body: JSON.stringify(garmentData)
       });
       if (res.ok) {
@@ -292,34 +360,86 @@ export default function App() {
     alert("Closet and aesthetic preferences updated successfully!");
   };
 
-  // Profile switches
-  const handleProfileLoginSwitch = async (creds: { email: string; password: string }): Promise<void> => {
+  const handleSignOut = async () => {
     try {
-      const res = await fetch("/api/login", {
+      if (firebaseAuth?.currentUser) {
+        await signOut(firebaseAuth);
+      }
+    } catch (error) {
+      console.warn("No se pudo cerrar sesion en Firebase.", error);
+    } finally {
+      setCurrentUser(null);
+      setShowProfileModal(false);
+      setShowInboxModal(false);
+      setShowPublishModal(false);
+      setShowLoginModal(false);
+      setShowLanding(true);
+    }
+  };
+
+  const handleEnterMarketplace = () => {
+    setShowLanding(false);
+    if (!currentUser) {
+      setShowLoginModal(true);
+    }
+  };
+
+  // Profile switches and Firebase auth entrypoint
+  const handleLoginRequest = async (request: LoginRequest) => {
+    setLoginError(null);
+
+    if (!firebaseAuth || !firebaseConfigured) {
+      setLoginError("Firebase no está configurado. Completa las variables VITE_FIREBASE_* para activar este flujo.");
+      return;
+    }
+
+    if (turnstileSiteKey) {
+      if (!request.turnstileToken) {
+        setLoginError("Completa el captcha antes de continuar.");
+        return;
+      }
+
+      const turnstileResponse = await fetch("/api/security/turnstile/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(creds)
+        body: JSON.stringify({ token: request.turnstileToken }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentUser(data.user);
-        // Refresh messages
-        const chatsRes = await fetch("/api/chats");
-        if (chatsRes.ok) {
-          setChats(await chatsRes.json());
-        }
-      } else {
-        const errorData = await res.json();
-        const errorMessage = errorData.error || "Credenciales inválidas. Por favor intenta de nuevo.";
-        alert(errorMessage);
-        throw new Error(errorMessage);
+
+      if (!turnstileResponse.ok) {
+        const payload = await turnstileResponse.json().catch(() => null);
+        setLoginError(payload?.error || "No se pudo validar el captcha.");
+        return;
       }
-    } catch (err) {
-      if (err instanceof TypeError) {
-        alert("Error en la conexión. Por favor intenta de nuevo.");
-      }
-      throw err;
     }
+
+    if (request.action === "google") {
+      if (!googleProvider) {
+        setLoginError("No se pudo preparar el proveedor de Google.");
+        return;
+      }
+
+      await signInWithPopup(firebaseAuth, googleProvider);
+      return;
+    }
+
+    if (!request.email || !request.password) {
+      setLoginError("Necesitas correo y contraseña para Firebase.");
+      return;
+    }
+
+    if (!request.turnstileToken && turnstileSiteKey) {
+      setLoginError("Completa el captcha antes de continuar.");
+      return;
+    }
+
+    if (request.action === "register") {
+      const result = await createUserWithEmailAndPassword(firebaseAuth, request.email, request.password);
+      const displayName = request.displayName || request.email.split("@")[0];
+      await updateProfile(result.user, { displayName });
+      return;
+    }
+
+    await signInWithEmailAndPassword(firebaseAuth, request.email, request.password);
   };
 
   // Quick action: Clear filters
@@ -355,6 +475,80 @@ export default function App() {
     return matchesSearch && matchesCategory && matchesSize && matchesCondition && matchesPrice;
   });
 
+  if (showLanding) {
+    return (
+      <div className="min-h-screen bg-linear-to-b from-amber-50 via-white to-orange-50 text-slate-900">
+        <section className="max-w-6xl mx-auto px-6 py-16 md:py-24">
+          <div className="grid md:grid-cols-2 gap-10 items-center">
+            <div className="space-y-6">
+              <span className="inline-flex items-center rounded-full bg-orange-100 text-orange-800 px-4 py-1 text-xs font-bold uppercase tracking-wider">
+                Marketplace de segunda mano
+              </span>
+              <h1 className="text-4xl md:text-6xl font-black leading-tight text-slate-900">
+                Compra y vende ropa con estilo sostenible.
+              </h1>
+              <p className="text-sm md:text-base text-slate-600 max-w-xl leading-relaxed">
+                Publica prendas, conecta con compradores y negocia en tiempo real. Todo en un solo lugar con autenticacion segura.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={handleEnterMarketplace}
+                  className="px-6 py-3 rounded-full bg-slate-900 text-white font-bold hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  Entrar al marketplace
+                </button>
+                <button
+                  onClick={() => setShowSchemaGuideModal(true)}
+                  className="px-6 py-3 rounded-full border border-slate-300 text-slate-700 font-bold hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Ver info tecnica
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-white border border-orange-100 rounded-3xl p-6 shadow-xl shadow-orange-100/60 space-y-4">
+              <h2 className="text-xl font-extrabold">Que puedes hacer aqui</h2>
+              <ul className="space-y-3 text-sm text-slate-700">
+                <li>• Publicar prendas y gestionar tu perfil.</li>
+                <li>• Filtrar por categoria, talla, condicion y precio.</li>
+                <li>• Dar likes, comentar y abrir chats de compra.</li>
+                <li>• Iniciar sesion con Firebase y proteccion captcha.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        {showLoginModal && (
+          <LoginModal
+            onClose={() => setShowLoginModal(false)}
+            onLogin={handleLoginRequest}
+            currentUser={currentUser}
+            firebaseConfigured={firebaseConfigured}
+            loginError={loginError}
+            canClose={!!currentUser}
+          />
+        )}
+
+        {showSchemaGuideModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-3">
+              <h3 className="font-extrabold text-slate-900">Info tecnica</h3>
+              <p className="text-sm text-slate-600">
+                El esquema SQL y el setup local estan documentados en `database_setup.md` y `README.dev.md`.
+              </p>
+              <button
+                onClick={() => setShowSchemaGuideModal(false)}
+                className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-bold hover:bg-slate-800 cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800 leading-normal">
       
@@ -365,6 +559,7 @@ export default function App() {
         onOpenInbox={() => setShowInboxModal(true)}
         onOpenProfile={() => setShowProfileModal(true)}
         onOpenLogin={() => setShowLoginModal(true)}
+        onSignOut={handleSignOut}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
         unreadCount={chats.length > 0 ? 1 : 0}
@@ -412,7 +607,7 @@ export default function App() {
         <div className="lg:col-span-3 space-y-6">
 
           {/* Social Showcase banner frame */}
-          <div className="bg-gradient-to-r from-pink-500 via-indigo-600 to-indigo-700 rounded-3xl p-6 md:p-8 text-white relative overflow-hidden shadow-xl">
+          <div className="bg-linear-to-r from-pink-500 via-indigo-600 to-indigo-700 rounded-3xl p-6 md:p-8 text-white relative overflow-hidden shadow-xl">
             {/* Ambient visual overlay orbs */}
             <div className="absolute top-0 right-0 w-80 h-full bg-white/5 skew-x-12 shrink-0"></div>
             
@@ -492,7 +687,7 @@ export default function App() {
       {/* Footer Segment */}
       <footer className="bg-slate-900 text-slate-450 text-xs py-12 border-t border-slate-850">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="text-center md:text-sm text-left">
+          <div className="text-sm text-center md:text-left">
             <h4 className="text-white font-extrabold font-display text-lg tracking-tight">VIBEWEAR SOCIAL MARKETPLACE</h4>
             <p className="text-[11px] text-slate-400 font-semibold mt-1">
               Building circular economy fashion loops on resilient Express + PostgreSQL architectures.
@@ -549,6 +744,7 @@ export default function App() {
           items={items}
           onUpdateBio={handleUpdateBio}
           onSelectGarment={setActiveItemDetails}
+          onSignOut={handleSignOut}
         />
       )}
 
@@ -556,9 +752,11 @@ export default function App() {
       {showLoginModal && (
         <LoginModal
           onClose={() => setShowLoginModal(false)}
-          onLogin={handleProfileLoginSwitch}
+          onLogin={handleLoginRequest}
           currentUser={currentUser}
-          usersList={users}
+          firebaseConfigured={firebaseConfigured}
+          loginError={loginError}
+          canClose={!!currentUser}
         />
       )}
 
