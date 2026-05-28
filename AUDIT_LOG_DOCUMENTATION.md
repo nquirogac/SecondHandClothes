@@ -116,3 +116,97 @@ Además de las entradas de inicio de sesión habituales, ahora también se regis
 - `login.failed` con conteo de intentos y tiempo de reintento recomendado
 
 Esto facilita revisar cuándo se activó el límite y qué usuarios o IPs lo generaron.
+
+## Casos de prueba
+
+### Objetivos de las pruebas
+
+1. Verificar que se generan entradas de auditoría para login exitoso, login auto-creado y login fallido.
+2. Verificar que la protección de fuerza bruta bloquea el acceso después de varios intentos fallidos.
+3. Confirmar que el bloqueo devuelve `429 Too Many Requests` y un campo `retryAfter`.
+4. Revisar que `audit.log` contiene los eventos `login.failed` y `login.rate-limited`.
+
+### Casos de prueba diseñados
+
+- Caso 1: login exitoso con usuario existente
+  - Endpoint: `POST /api/login`
+  - Payload: `{ username: "retro_lucia" }`
+  - Resultado esperado: status `200`, `success: true`, entrada de auditoría `login.success`.
+
+- Caso 2: login con usuario nuevo auto-creado
+  - Endpoint: `POST /api/login`
+  - Payload: `{ username: "audit_test_user", email: "audit_test_user@example.com" }`
+  - Resultado esperado: status `200`, `success: true`, entrada de auditoría `login.auto-created`.
+
+- Caso 3: intentos fallidos de login por email desconocido
+  - Endpoint: `POST /api/login`
+  - Payload: `{ email: "bruteforce_test@example.com" }`
+  - Resultado esperado: status `400` para los primeros intentos fallidos.
+
+- Caso 4: activación de la protección contra fuerza bruta
+  - Repetir el caso 3 cinco veces con el mismo email.
+  - Resultado esperado: los primeros 4 intentos devuelven `400`, el quinto devuelve `429` con `retryAfter` positivo.
+  - Nota: el quinto intento activa el bloqueo y se registra como `login.failed` con `blocked: true`.
+
+- Caso 5: verificación de auditoría posterior
+  - Leer `audit.log` y buscar las entradas:
+    - `login.success`
+    - `login.auto-created`
+    - al menos 5 `login.failed` (siendo el último con `blocked: true`)
+
+## Cómo ejecutar las pruebas
+
+### Ejecución manual
+
+1. Arranca el servidor en la raíz del proyecto:
+
+```bash
+npm run dev
+```
+
+2. En otra terminal, ejecuta los siguientes comandos `curl`:
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"retro_lucia"}'
+
+curl -X POST http://127.0.0.1:3000/api/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"audit_test_user","email":"audit_test_user@example.com"}'
+
+for i in {1..5}; do
+  curl -X POST http://127.0.0.1:3000/api/login \
+    -H "Content-Type: application/json" \
+    -d '{"email":"bruteforce_test@example.com"}'
+  echo "\n--- intento $i ---\n"
+done
+```
+
+3. Revisa el contenido de `audit.log`:
+
+```bash
+tail -n 20 audit.log
+```
+
+### Ejecución automática
+
+1. Arranca el servidor en la raíz del proyecto:
+
+```bash
+npm run dev
+```
+
+2. En otra terminal, ejecuta el script automático:
+
+```bash
+npm run test:audit
+```
+
+3. El script validará la respuesta de cada endpoint y también comprobará los eventos en `audit.log`.
+
+### Resultado esperado
+
+- `npm run test:audit` debe terminar sin errores.
+- `audit.log` debe incluir líneas JSON separadas por saltos de línea.
+- El script valida que exista `login.success`, `login.auto-created`, y al menos 5 `login.failed` (el último con `blocked: true`).
