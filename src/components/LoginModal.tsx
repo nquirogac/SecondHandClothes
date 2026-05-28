@@ -108,8 +108,8 @@ export default function LoginModal({
           <div className="flex items-center space-x-2">
             <Mail className="text-indigo-650" size={22} />
             <div>
-              <h3 className="font-extrabold text-slate-850 text-lg leading-tight">Access your account</h3>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Firebase auth only</p>
+              <h3 className="font-extrabold text-slate-850 text-lg leading-tight">Accede a tu cuenta</h3>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Solo autenticación Firebase</p>
             </div>
           </div>
           <button
@@ -125,7 +125,7 @@ export default function LoginModal({
                 : "border-slate-100 text-slate-300 cursor-not-allowed"
             }`}
           >
-            {canClose ? "Close" : "Login required"}
+            {canClose ? "Cerrar" : "Inicio de sesión obligatorio"}
           </button>
         </div>
 
@@ -157,8 +157,8 @@ export default function LoginModal({
         {submitSuccess ? (
           <div className="p-8 text-center bg-emerald-50 rounded-2xl border border-emerald-150 space-y-2">
             <Check size={28} className="mx-auto text-emerald-500 animate-bounce" />
-            <h4 className="text-sm font-bold text-emerald-900">Signed in successfully</h4>
-            <p className="text-xs text-emerald-705">Syncing your authenticated closet session...</p>
+              <h4 className="text-sm font-bold text-emerald-900">Sesión iniciada correctamente</h4>
+            <p className="text-xs text-emerald-705">Sincronizando tu sesión autenticada...</p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -185,12 +185,12 @@ export default function LoginModal({
 
             <div>
               <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                Email
+                Correo
               </label>
               <input
                 type="email"
                 required
-                placeholder="maris@example.com"
+                placeholder="correo@ejemplo.com"
                 className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
@@ -199,7 +199,7 @@ export default function LoginModal({
 
             <div>
               <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                Password
+                Contraseña
               </label>
               <input
                 type="password"
@@ -214,11 +214,11 @@ export default function LoginModal({
             {firebaseAction === "register" && (
               <div>
                 <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                  Display name
+                  Nombre visible
                 </label>
                 <input
                   type="text"
-                  placeholder="Vintage Camila"
+                  placeholder="Nombre público"
                   className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
                   value={displayNameInput}
                   onChange={(e) => setDisplayNameInput(e.target.value)}
@@ -229,18 +229,18 @@ export default function LoginModal({
             {turnstileSiteKey ? (
               <div>
                 <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                  Security challenge
+                  Desafío de seguridad
                 </label>
                 <div ref={turnstileRef} className="min-h-19.5" />
               </div>
             ) : (
               <div className="p-3 rounded-xl bg-amber-50 border border-amber-100 text-amber-700 text-[11px] font-semibold leading-relaxed">
-                Turnstile is not configured yet. Set VITE_TURNSTILE_SITE_KEY to enable the captcha gate.
+                Turnstile no está configurado. Define `VITE_TURNSTILE_SITE_KEY` para habilitar el captcha.
               </div>
             )}
 
             <div className="flex gap-2 pt-2">
-              <button
+                <button
                 type="button"
                 onClick={async () => {
                   try {
@@ -262,7 +262,7 @@ export default function LoginModal({
                 className="w-full px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-lg shadow-indigo-100 transition-all cursor-pointer active:scale-95 flex items-center justify-center space-x-2"
               >
                 <BadgeCheck size={14} />
-                <span>{firebaseAction === "register" ? "Create account" : "Sign in"}</span>
+                <span>{firebaseAction === "register" ? "Crear cuenta" : "Iniciar sesión"}</span>
               </button>
             </div>
           </form>
