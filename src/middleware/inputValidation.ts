@@ -10,14 +10,8 @@ function handleValidationResult(req: Request, res: Response, next: NextFunction)
 }
 
 export const validateLogin = [
-  body("userId").optional().isString().trim().isLength({ min: 1, max: 64 }),
-  body("username")
-    .optional()
-    .isString()
-    .trim()
-    .isLength({ min: 3, max: 30 })
-    .matches(/^[a-zA-Z0-9_\-\.]+$/),
-  body("email").optional().isEmail().normalizeEmail(),
+  body("email").isEmail().normalizeEmail(),
+  body("password").isString().isLength({ min: 8, max: 128 }),
   handleValidationResult,
 ];
 

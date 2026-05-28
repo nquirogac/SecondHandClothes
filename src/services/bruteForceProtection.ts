@@ -73,9 +73,6 @@ export function recordLoginSuccess(key: string) {
   attemptStore.delete(key);
 }
 
-export function getLoginKey(username?: string, email?: string, userId?: string, ip?: string) {
-  if (username) return `login:${username.toLowerCase()}`;
-  if (email) return `login:${email.toLowerCase()}`;
-  if (userId) return `login:${userId}`;
-  return `login:ip:${ip ?? "unknown"}`;
+export function getLoginKey(email: string, ip?: string) {
+  return `login:${email.toLowerCase()}`;
 }

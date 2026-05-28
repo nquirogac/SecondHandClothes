@@ -258,8 +258,8 @@ async function startServer() {
   });
 
   app.post("/api/login", validateLogin, sanitizeBody(), (req, res) => {
-    const { userId, username, email } = req.body;
-    const loginKey = getLoginKey(username, email, userId, req.ip);
+    const { email, password } = req.body;
+    const loginKey = getLoginKey(email, req.ip);
     const blockStatus = isLoginBlocked(loginKey);
 
     if (blockStatus.blocked) {
@@ -274,47 +274,24 @@ async function startServer() {
       });
     }
 
-    const foundUser = users.find(
-      (u) => u.id === userId || u.username === username || u.email === email,
-    );
+    const foundUser = users.find((u) => u.email === email);
 
-    if (foundUser) {
-      currentUser = foundUser;
-      recordLoginSuccess(loginKey);
-      void appendAuditLog("login.success", {
-        userId: foundUser.id,
-        username: foundUser.username,
-        source: "login",
-      }).catch((err) => console.error("Audit log write failed:", err));
-      return res.json({ success: true, user: currentUser });
-    }
-
-    if (username) {
-      const newUser: User = {
-        id: "u_" + Date.now(),
-        username: username.toLowerCase().replace(/\s+/g, "_"),
-        email: email || `${username}@example.com`,
-        passwordHash: "", // Empty hash for auto-created login users
-        avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
-        bio: "Bio not set yet - Tap edit profile to customize",
-        stylePreference: ["Casual"],
-        joinedDate: new Date().toISOString(),
-        rating: 5.0,
-      };
-      users.push(newUser);
-      currentUser = newUser;
-      recordLoginSuccess(loginKey);
-      void appendAuditLog("login.auto-created", {
-        userId: newUser.id,
-        username: newUser.username,
-        email: newUser.email,
-      }).catch((err) => console.error("Audit log write failed:", err));
-      return res.json({ success: true, user: currentUser });
+    if (foundUser && foundUser.passwordHash) {
+      const passwordValid = verifyPassword(password, foundUser.passwordHash);
+      if (passwordValid) {
+        currentUser = foundUser;
+        recordLoginSuccess(loginKey);
+        void appendAuditLog("login.success", {
+          userId: foundUser.id,
+          username: foundUser.username,
+          source: "login",
+        }).catch((err) => console.error("Audit log write failed:", err));
+        return res.json({ success: true, user: currentUser });
+      }
     }
 
     const failureStatus = recordLoginFailure(loginKey);
     void appendAuditLog("login.failed", {
-      attemptedUsername: username || null,
       attemptedEmail: email || null,
       blocked: failureStatus.blocked,
       attempts: failureStatus.attempts,

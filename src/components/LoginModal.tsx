@@ -1,10 +1,10 @@
 import React, { useState } from "react";
-import { X, Mail, ShieldAlert, Sparkles, Check, RefreshCw } from "lucide-react";
+import { X, Mail, ShieldAlert, Sparkles, Check, RefreshCw, Lock } from "lucide-react";
 import { User } from "../types";
 
 interface LoginModalProps {
   onClose: () => void;
-  onLogin: (credentials: { userId?: string; username: string; email?: string }) => void;
+  onLogin: (credentials: { email: string; password: string }) => Promise<void>;
   currentUser: User | null;
   usersList: User[];
 }
@@ -15,30 +15,44 @@ export default function LoginModal({
   currentUser,
   usersList
 }: LoginModalProps) {
-  const [usernameInput, setUsernameInput] = useState("");
   const [emailInput, setEmailInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!usernameInput) {
-      alert("Please provide a valid username to log in.");
+    if (!emailInput || !passwordInput) {
+      alert("Por favor ingresa tu email y contraseña.");
       return;
     }
-    onLogin({
-      username: usernameInput.toLowerCase().replace(/\s+/g, "_"),
-      email: emailInput || `${usernameInput}@example.com`
-    });
-    setSubmitSuccess(true);
-    setTimeout(() => {
-      onClose();
-    }, 1200);
+    setIsLoading(true);
+    try {
+      await onLogin({
+        email: emailInput,
+        password: passwordInput
+      });
+      setSubmitSuccess(true);
+      setTimeout(() => {
+        setIsLoading(false);
+        onClose();
+      }, 1200);
+    } catch (err) {
+      setIsLoading(false);
+    }
   };
 
-  const handleSwitchAccount = (user: User) => {
-    onLogin({ userId: user.id, username: user.username });
-    alert(`Switched active profile to @${user.username}!`);
-    onClose();
+  const handleSwitchAccount = async (user: User) => {
+    // For quick switch, we need to know the password for demo users
+    // All demo users have the same password for testing
+    const demoPassword = "password123";
+    try {
+      await onLogin({ email: user.email, password: demoPassword });
+      alert(`Switched active profile to @${user.username}!`);
+      onClose();
+    } catch (err) {
+      // Error already shown
+    }
   };
 
   return (
@@ -86,44 +100,46 @@ export default function LoginModal({
         {submitSuccess ? (
           <div className="p-8 text-center bg-emerald-50 rounded-2xl border border-emerald-150 space-y-2">
             <Check size={28} className="mx-auto text-emerald-500 animate-bounce" />
-            <h4 className="text-sm font-bold text-emerald-900">Sign In success!</h4>
-            <p className="text-xs text-emerald-705">Synergizing closet presets & social network nodes...</p>
+            <h4 className="text-sm font-bold text-emerald-900">¡Inicio de sesión exitoso!</h4>
+            <p className="text-xs text-emerald-705">Sincronizando datos de tu perfil...</p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                Enter Stylist Username *
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. thrifty_maris"
-                className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
-                value={usernameInput}
-                onChange={(e) => setUsernameInput(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                Designated Email (Optional)
+                Email *
               </label>
               <input
                 type="email"
-                placeholder="maris@example.com"
+                required
+                placeholder="ejemplo@email.com"
                 className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
               />
             </div>
 
+            <div>
+              <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
+                Contraseña *
+              </label>
+              <input
+                type="password"
+                required
+                placeholder="Ingresa tu contraseña"
+                className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+              />
+            </div>
+
             <div className="flex justify-end pt-2">
               <button
                 type="submit"
-                className="w-full px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-lg shadow-indigo-100 transition-all cursor-pointer active:scale-95"
+                disabled={isLoading}
+                className="w-full px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-indigo-100 transition-all cursor-pointer active:scale-95"
               >
-                Join / Sign In
+                {isLoading ? "Iniciando sesión..." : "Iniciar Sesión"}
               </button>
             </div>
           </form>

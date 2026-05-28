@@ -293,7 +293,7 @@ export default function App() {
   };
 
   // Profile switches
-  const handleProfileLoginSwitch = async (creds: { userId?: string; username: string; email?: string }) => {
+  const handleProfileLoginSwitch = async (creds: { email: string; password: string }): Promise<void> => {
     try {
       const res = await fetch("/api/login", {
         method: "POST",
@@ -308,27 +308,17 @@ export default function App() {
         if (chatsRes.ok) {
           setChats(await chatsRes.json());
         }
+      } else {
+        const errorData = await res.json();
+        const errorMessage = errorData.error || "Credenciales inválidas. Por favor intenta de nuevo.";
+        alert(errorMessage);
+        throw new Error(errorMessage);
       }
     } catch (err) {
-      // Switch local representation
-      const targetUser = users.find(u => u.id === creds.userId || u.username === creds.username);
-      if (targetUser) {
-        setCurrentUser(targetUser);
-      } else {
-        const guest: User = {
-          id: "u_" + Date.now(),
-          username: creds.username.toLowerCase(),
-          email: creds.email || `${creds.username}@example.com`,
-          passwordHash: "",
-          avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
-          bio: "Guest thrifter aesthetic",
-          stylePreference: ["Casual"],
-          joinedDate: new Date().toISOString(),
-          rating: 5.0
-        };
-        setUsers(prev => [...prev, guest]);
-        setCurrentUser(guest);
+      if (err instanceof TypeError) {
+        alert("Error en la conexión. Por favor intenta de nuevo.");
       }
+      throw err;
     }
   };
 
