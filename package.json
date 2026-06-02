@@ -11,9 +11,18 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test": "jest",
+    "test:password": "tsx scripts/password-tests.ts",
+    "test:sanitizer": "tsx scripts/sanitizer-tests.ts",
+    "test:scripts": "npm run test:password && npm run test:sanitizer",
+    "test:password:e2e": "tsx scripts/password-e2e.ts",
+    "test:sanitizer:e2e": "tsx scripts/sanitizer-e2e.ts",
     "test:ci": "jest --runInBand --detectOpenHandles"
   },
   "dependencies": {
+    "argon2": "^0.30.2",
+    "express-validator": "^6.15.0",
+    "sanitize-html": "^2.9.0",
+    "validator": "^13.9.0",
     "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
