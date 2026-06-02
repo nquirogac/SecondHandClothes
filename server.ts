@@ -61,8 +61,7 @@ export async function startServer(port = 3000) {
   const app = express();
   const PORT = port;
 
-  // Middleware for parsing JSON requests
-  app.use(express.json());
+  app.use(express.json({ limit: "10kb" }));
 
   // Basic rate limiting to protect public API surface
   const generalLimiter = rateLimit({
@@ -109,6 +108,7 @@ export async function startServer(port = 3000) {
       id: "u1",
       username: "retro_lucia",
       email: "lucia@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
       bio: "Vintage enthusiast & thrifter. Collecting 80s and 90s original streetwear.",
       stylePreference: ["Vintage", "Casual"],
@@ -119,6 +119,7 @@ export async function startServer(port = 3000) {
       id: "u2",
       username: "street_felix",
       email: "felix@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200",
       bio: "Hypebeast since 2018. Buy/Sell/Trade streetwear, cargo, graphic tees, sneakerhead.",
       stylePreference: ["Streetwear", "Sportswear"],
@@ -129,6 +130,7 @@ export async function startServer(port = 3000) {
       id: "u3",
       username: "olivia_chic",
       email: "olivia@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=200",
       bio: "Curator of upscale Parisian vintage formalwear and classy accessories.",
       stylePreference: ["Formal", "Casual"],
@@ -139,6 +141,7 @@ export async function startServer(port = 3000) {
       id: "u4",
       username: "eco_gabriel",
       email: "gabriel@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200",
       bio: "Environmentalist looking to extend life cycle of sustainable garment crafts.",
       stylePreference: ["Casual", "Sportswear"],
@@ -152,6 +155,7 @@ export async function startServer(port = 3000) {
     id: "u0",
     username: "vintage_camila",
     email: "camila@example.com",
+    passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
     avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
     bio: "Love looking for treasures of the past. Sustainable fashion only! 🌱👗",
     stylePreference: ["Vintage", "Casual", "Formal"],
@@ -397,6 +401,7 @@ export async function startServer(port = 3000) {
         stylePreference: parseStylePreferences(req.header("x-user-styles") || undefined),
         joinedDate: req.header("x-user-joined-date") || users.find(user => user.id === headerUserId)?.joinedDate || new Date().toISOString(),
         rating: Number(req.header("x-user-rating") || 5),
+        passwordHash: "",
       };
 
       return upsertUserRecord(resolvedUser);
@@ -421,6 +426,7 @@ export async function startServer(port = 3000) {
           stylePreference: ["Casual"],
           joinedDate: new Date().toISOString(),
           rating: 5.0,
+          passwordHash: "",
         };
 
         return upsertUserRecord(resolvedUser);
@@ -476,13 +482,13 @@ export async function startServer(port = 3000) {
     }
 
     let foundUser = users.find(u => u.id === userId || u.username === username || u.email === email);
-    
+
     if (foundUser) {
       currentUser = foundUser;
       upsertUserRecord(foundUser);
       return res.json({ success: true, user: currentUser });
     }
-    
+
     // Fallback: If username doesn't exist, log in as new with random profile setup
     if (username) {
       const newUser: User = {
@@ -493,7 +499,8 @@ export async function startServer(port = 3000) {
         bio: "Bio not set yet - Tap edit profile to customize",
         stylePreference: ["Casual"],
         joinedDate: new Date().toISOString(),
-        rating: 5.0
+        rating: 5.0,
+        passwordHash: "",
       };
       users.push(newUser);
       currentUser = newUser;
@@ -526,7 +533,8 @@ export async function startServer(port = 3000) {
     const newUser: User = {
       id: "u_" + Date.now(),
       username: username.toLowerCase().replace(/\s+/g, "_"),
-      email: email,
+      email,
+      passwordHash: "", // Guardamos el hash, NUNCA la contraseña plana
       avatar: avatar || "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
       bio: bio || "Sustainable apparel searcher",
       stylePreference: stylePreference || ["Casual"],
@@ -547,9 +555,6 @@ export async function startServer(port = 3000) {
 
   app.post("/api/items", async (req, res) => {
     const { title, description, imageUrl, category, size, brand, condition, price } = req.body;
-    if (!title || !price || !category || !size || !condition) {
-      return res.status(400).json({ error: "Missing required listing attributes" });
-    }
 
     const activeUser = await resolveActiveUser(req);
 
@@ -561,19 +566,19 @@ export async function startServer(port = 3000) {
       title: title,
       description: description || "Gorgeous pre-loved fashion piece.",
       imageUrl: imageUrl || "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=800",
-      category: category,
-      size: size,
+      category,
+      size,
       brand: brand || "Unbranded / Vintage",
-      condition: condition,
+      condition,
       price: Number(price),
       likesCount: 0,
       likedByUserIds: [],
       comments: [],
       status: "available",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
-    clothingItems.unshift(newItem); // Pushes to top of feed
+    clothingItems.unshift(newItem);
     res.json({ success: true, item: newItem });
   });
 
@@ -605,11 +610,8 @@ export async function startServer(port = 3000) {
   app.post("/api/items/:id/comment", async (req, res) => {
     const { id } = req.params;
     const { text } = req.body;
-    if (!text || text.trim() === "") {
-      return res.status(400).json({ error: "Comment text cannot be empty" });
-    }
 
-    const item = clothingItems.find(i => i.id === id);
+    const item = clothingItems.find((i) => i.id === id);
     if (!item) {
       return res.status(404).json({ error: "Item not found" });
     }
@@ -658,9 +660,6 @@ export async function startServer(port = 3000) {
   // Send communication to seller
   app.post("/api/chats", async (req, res) => {
     const { itemId, receiverId, text } = req.body;
-    if (!itemId || !receiverId || !text || text.trim() === "") {
-      return res.status(400).json({ error: "Missing required chat parameters" });
-    }
 
     const activeUser = await resolveActiveUser(req);
 

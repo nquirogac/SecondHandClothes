@@ -24,6 +24,7 @@ export function firebaseUserToMarketplaceUser(user: FirebaseUser): User {
     stylePreference: ["Casual"],
     joinedDate: user.metadata.creationTime || new Date().toISOString(),
     rating: 5.0,
+    passwordHash: "",
   };
 }
 
