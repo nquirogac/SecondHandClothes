@@ -8,6 +8,7 @@ interface ProfileModalProps {
   items: ClothingItem[];
   onUpdateBio: (newBio: string, stylePrefs: string[]) => void;
   onSelectGarment: (item: ClothingItem) => void;
+  onSignOut: () => void;
 }
 
 const STOCK_STYLES = ["Vintage", "Casual", "Streetwear", "Formal", "Sportswear", "Gothic"];
@@ -17,7 +18,8 @@ export default function ProfileModal({
   currentUser,
   items,
   onUpdateBio,
-  onSelectGarment
+  onSelectGarment,
+  onSignOut
 }: ProfileModalProps) {
   const [bio, setBio] = useState(currentUser?.bio || "");
   const [selectedStyles, setSelectedStyles] = useState<string[]>(currentUser?.stylePreference || []);
@@ -57,6 +59,15 @@ export default function ProfileModal({
             className="p-1 px-3 border border-slate-200 text-slate-500 hover:text-slate-900 text-xs font-bold rounded-lg cursor-pointer"
           >
             Go Back
+          </button>
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            onClick={onSignOut}
+            className="px-3 py-1.5 text-xs font-bold rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+          >
+            Sign out
           </button>
         </div>
 

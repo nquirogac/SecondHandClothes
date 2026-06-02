@@ -8,6 +8,7 @@ interface NavigationProps {
   onOpenInbox: () => void;
   onOpenProfile: () => void;
   onOpenLogin: () => void;
+  onSignOut: () => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   unreadCount: number;
@@ -19,6 +20,7 @@ export default function Navigation({
   onOpenInbox,
   onOpenProfile,
   onOpenLogin,
+  onSignOut,
   searchQuery,
   setSearchQuery,
   unreadCount
@@ -30,11 +32,11 @@ export default function Navigation({
           
           {/* Logo & Brand */}
           <div className="flex items-center space-x-3 cursor-pointer" onClick={onOpenProfile}>
-            <div className="h-10 w-10 bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-xl flex items-center justify-center text-white font-black shadow-md shadow-purple-200">
+            <div className="h-10 w-10 bg-linear-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-xl flex items-center justify-center text-white font-black shadow-md shadow-purple-200">
               <ShoppingBag size={20} />
             </div>
             <div>
-              <h1 className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-slate-900 via-indigo-950 to-purple-900 bg-clip-text text-transparent">
+              <h1 className="text-xl font-extrabold tracking-tight bg-linear-to-r from-slate-900 via-indigo-950 to-purple-900 bg-clip-text text-transparent">
                 VIBE<span className="font-light text-indigo-600">WEAR</span>
               </h1>
               <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest leading-none mt-0.5">
@@ -105,9 +107,9 @@ export default function Navigation({
                 </button>
                 
                 <button
-                  onClick={onOpenLogin}
+                  onClick={onSignOut}
                   className="p-1.5 text-slate-400 hover:text-rose-500 rounded-full hover:bg-rose-50 transition-all cursor-pointer"
-                  title="Switch / Log In"
+                  title="Sign out"
                 >
                   <LogOut size={16} />
                 </button>
@@ -117,7 +119,7 @@ export default function Navigation({
                 onClick={onOpenLogin}
                 className="px-4 py-2 border border-indigo-200 text-indigo-600 hover:bg-indigo-50 text-sm font-bold rounded-full transition-all cursor-pointer"
               >
-                Connect Email
+                Log In / Sign Up
               </button>
             )}
 
