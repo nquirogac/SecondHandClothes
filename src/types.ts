@@ -6,11 +6,12 @@ export interface User {
   id: string;
   username: string;
   email: string;
+  passwordHash: string; // Argon2 hash - NUNCA guardar contraseña plana
   avatar: string;
   bio?: string;
   stylePreference: string[];
   joinedDate: string;
-  rating: number; // e.g., 4.8
+  rating: number;
 }
 
 export interface Comment {

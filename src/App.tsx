@@ -360,6 +360,8 @@ export default function App() {
     alert("Closet and aesthetic preferences updated successfully!");
   };
 
+  // Profile switches
+  const handleProfileLoginSwitch = async (creds: { email: string; password: string }): Promise<void> => {
   const handleSignOut = async () => {
     try {
       if (firebaseAuth?.currentUser) {
@@ -404,6 +406,25 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: request.turnstileToken }),
       });
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentUser(data.user);
+        // Refresh messages
+        const chatsRes = await fetch("/api/chats");
+        if (chatsRes.ok) {
+          setChats(await chatsRes.json());
+        }
+      } else {
+        const errorData = await res.json();
+        const errorMessage = errorData.error || "Credenciales inválidas. Por favor intenta de nuevo.";
+        alert(errorMessage);
+        throw new Error(errorMessage);
+      }
+    } catch (err) {
+      if (err instanceof TypeError) {
+        alert("Error en la conexión. Por favor intenta de nuevo.");
+      }
+      throw err;
 
       if (!turnstileResponse.ok) {
         const payload = await turnstileResponse.json().catch(() => null);

@@ -5,6 +5,11 @@ import rateLimit from "express-rate-limit";
 import fs from "fs";
 import path from "path";
 import { User, ClothingItem, Comment, ChatMessage } from "./src/types";
+import { validateLogin, validateRegister, validateCreateItem, validateComment, validateChat } from "./src/middleware/inputValidation";
+import { sanitizeBody } from "./src/middleware/sanitizer";
+import { validatePasswordStrength, hashPassword, verifyPassword } from "./src/services/passwordService";
+import { appendAuditLog } from "./src/services/auditLog";
+import { getLoginKey, isLoginBlocked, recordLoginFailure, recordLoginSuccess } from "./src/services/bruteForceProtection";
 import { applicationDefault, cert, getApps as getAdminApps, initializeApp } from "firebase-admin/app";
 import { getAuth as getAdminAuth } from "firebase-admin/auth";
 
@@ -59,10 +64,10 @@ type TurnstileVerificationResult = {
 
 export async function startServer(port = 3000) {
   const app = express();
-  const PORT = port;
+  const PORT = Number(process.env.PORT) || 3000;
+  //const PORT = port;
 
-  // Middleware for parsing JSON requests
-  app.use(express.json());
+  app.use(express.json({ limit: "10kb" }));
 
   // Basic rate limiting to protect public API surface
   const generalLimiter = rateLimit({
@@ -109,6 +114,7 @@ export async function startServer(port = 3000) {
       id: "u1",
       username: "retro_lucia",
       email: "lucia@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
       bio: "Vintage enthusiast & thrifter. Collecting 80s and 90s original streetwear.",
       stylePreference: ["Vintage", "Casual"],
@@ -119,6 +125,7 @@ export async function startServer(port = 3000) {
       id: "u2",
       username: "street_felix",
       email: "felix@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200",
       bio: "Hypebeast since 2018. Buy/Sell/Trade streetwear, cargo, graphic tees, sneakerhead.",
       stylePreference: ["Streetwear", "Sportswear"],
@@ -129,6 +136,7 @@ export async function startServer(port = 3000) {
       id: "u3",
       username: "olivia_chic",
       email: "olivia@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=200",
       bio: "Curator of upscale Parisian vintage formalwear and classy accessories.",
       stylePreference: ["Formal", "Casual"],
@@ -139,6 +147,7 @@ export async function startServer(port = 3000) {
       id: "u4",
       username: "eco_gabriel",
       email: "gabriel@example.com",
+      passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
       avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200",
       bio: "Environmentalist looking to extend life cycle of sustainable garment crafts.",
       stylePreference: ["Casual", "Sportswear"],
@@ -152,6 +161,7 @@ export async function startServer(port = 3000) {
     id: "u0",
     username: "vintage_camila",
     email: "camila@example.com",
+    passwordHash: "$argon2id$v=19$m=19456,t=2,p=1$GX0qhWJXcMMyUqEEIEQmVQ$4QKc4SCOP/Y8T2LZlLmJ3eoaVXFsmVzKmGY0mQ8F7wU", // Demo user
     avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
     bio: "Love looking for treasures of the past. Sustainable fashion only! 🌱👗",
     stylePreference: ["Vintage", "Casual", "Formal"],
@@ -445,6 +455,21 @@ export async function startServer(port = 3000) {
     res.json(await resolveActiveUser(req));
   });
 
+  app.post("/api/login", validateLogin, sanitizeBody(), (req, res) => {
+    const { email, password } = req.body;
+    const loginKey = getLoginKey(email, req.ip);
+    const blockStatus = isLoginBlocked(loginKey);
+
+    if (blockStatus.blocked) {
+      void appendAuditLog("login.rate-limited", {
+        loginKey,
+        retryAfter: blockStatus.retryAfter,
+      }).catch((err) => console.error("Audit log write failed:", err));
+      return res.status(429).json({
+        success: false,
+        error: "Demasiados intentos de inicio de sesión. Intenta de nuevo más tarde.",
+        retryAfter: blockStatus.retryAfter,
+      });
   app.post("/api/security/turnstile/verify", turnstileLimiter, async (req, res) => {
     const { token } = req.body;
 
@@ -482,28 +507,98 @@ export async function startServer(port = 3000) {
       upsertUserRecord(foundUser);
       return res.json({ success: true, user: currentUser });
     }
-    
-    // Fallback: If username doesn't exist, log in as new with random profile setup
-    if (username) {
-      const newUser: User = {
+
+    let foundUser = users.find((u) => u.email === email);
+
+    // Auto-crear usuario si no existe (no guarda contraseña), y registrar el evento
+    if (!foundUser) {
+      const newUser = {
         id: "u_" + Date.now(),
-        username: username,
-        email: email || `${username}@example.com`,
-        avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
-        bio: "Bio not set yet - Tap edit profile to customize",
+        username: email.split("@")[0].toLowerCase().replace(/[^a-z0-9_]/g, "_") || "user",
+        email,
+        passwordHash: null,
+        avatar: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
+        bio: "Auto-created account",
         stylePreference: ["Casual"],
         joinedDate: new Date().toISOString(),
-        rating: 5.0
+        rating: 0,
       };
       users.push(newUser);
-      currentUser = newUser;
-      upsertUserRecord(newUser);
-      return res.json({ success: true, user: currentUser });
+      foundUser = newUser;
+      void appendAuditLog("login.auto-created", {
+        userId: newUser.id,
+        email: newUser.email,
+        source: "login",
+      }).catch((err) => console.error("Audit log write failed:", err));
     }
 
-    res.status(400).json({ success: false, error: "Invalid login credentials" });
-  });
+    if (foundUser && foundUser.passwordHash) {
+      const passwordValid = verifyPassword(password, foundUser.passwordHash);
+      if (passwordValid) {
+        currentUser = foundUser;
+        recordLoginSuccess(loginKey);
+        void appendAuditLog("login.success", {
+          userId: foundUser.id,
+          username: foundUser.username,
+          source: "login",
+        }).catch((err) => console.error("Audit log write failed:", err));
+        return res.json({ success: true, user: currentUser });
+      }
+    }
 
+    const failureStatus = recordLoginFailure(loginKey);
+    void appendAuditLog("login.failed", {
+      attemptedEmail: email || null,
+      blocked: failureStatus.blocked,
+      attempts: failureStatus.attempts,
+      retryAfter: failureStatus.retryAfter,
+    }).catch((err) => console.error("Audit log write failed:", err));
+
+    const response = {
+      success: false,
+      error: "Invalid login credentials",
+    } as { success: false; error: string; retryAfter?: number };
+
+    if (failureStatus.blocked) {
+      response.error = "Demasiados intentos de inicio de sesión. Intenta de nuevo más tarde.";
+      response.retryAfter = failureStatus.retryAfter ?? undefined;
+      return res.status(429).json(response);
+    }
+
+    res.status(400).json(response);
+  });
+///WARNING
+  app.post("/api/register", validateRegister, sanitizeBody(), async (req, res) => {
+    const { username, email, password, bio, stylePreference, avatar } = req.body;
+
+    // Validar fortaleza de la contraseña
+    const passwordCheck = validatePasswordStrength(password);
+    if (!passwordCheck.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: "Contraseña débil",
+        passwordErrors: passwordCheck.errors,
+      });
+    }
+
+    // Hashear la contraseña antes de guardar
+    let passwordHash: string;
+    try {
+      passwordHash = await hashPassword(password);
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        error: "Error al procesar la contraseña",
+      });
+    }
+
+    // Verificar que el usuario no exista ya
+    const userExists = users.find((u) => u.email === email || u.username === username);
+    if (userExists) {
+      return res.status(400).json({
+        success: false,
+        error: "El usuario o email ya está registrado",
+      });
   app.post("/api/register", registerLimiter, async (req, res) => {
     const { username, email, bio, stylePreference, avatar } = req.body;
     const turnstileToken = req.body.turnstileToken;
@@ -526,7 +621,8 @@ export async function startServer(port = 3000) {
     const newUser: User = {
       id: "u_" + Date.now(),
       username: username.toLowerCase().replace(/\s+/g, "_"),
-      email: email,
+      email,
+      passwordHash, // Guardamos el hash, NUNCA la contraseña plana
       avatar: avatar || "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
       bio: bio || "Sustainable apparel searcher",
       stylePreference: stylePreference || ["Casual"],
@@ -536,8 +632,28 @@ export async function startServer(port = 3000) {
 
     users.push(newUser);
     currentUser = newUser;
-    upsertUserRecord(newUser);
-    res.json({ success: true, user: currentUser });
+
+    void appendAuditLog("register.success", {
+      userId: newUser.id,
+      username: newUser.username,
+      email: newUser.email,
+    }).catch((err) => console.error("Audit log write failed:", err));
+
+    // Devolver el usuario SIN mostrar el hash
+    res.json({
+      success: true,
+      message: "Usuario registrado exitosamente",
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        email: newUser.email,
+        avatar: newUser.avatar,
+        bio: newUser.bio,
+        stylePreference: newUser.stylePreference,
+        joinedDate: newUser.joinedDate,
+        rating: newUser.rating,
+      },
+    });
   });
 
   // Clothing Item Endpoints
@@ -545,35 +661,38 @@ export async function startServer(port = 3000) {
     res.json(clothingItems);
   });
 
-  app.post("/api/items", async (req, res) => {
+  app.post("/api/items", validateCreateItem, sanitizeBody({ allowRichText: true }), (req, res) => {
     const { title, description, imageUrl, category, size, brand, condition, price } = req.body;
-    if (!title || !price || !category || !size || !condition) {
-      return res.status(400).json({ error: "Missing required listing attributes" });
-    }
 
     const activeUser = await resolveActiveUser(req);
 
     const newItem: ClothingItem = {
       id: "c_" + Date.now(),
-      sellerId: activeUser.id,
-      sellerName: activeUser.username,
-      sellerAvatar: activeUser.avatar,
-      title: title,
+      sellerId: currentUser.id,
+      sellerName: currentUser.username,
+      sellerAvatar: currentUser.avatar,
+      title,
       description: description || "Gorgeous pre-loved fashion piece.",
       imageUrl: imageUrl || "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=800",
-      category: category,
-      size: size,
+      category,
+      size,
       brand: brand || "Unbranded / Vintage",
-      condition: condition,
+      condition,
       price: Number(price),
       likesCount: 0,
       likedByUserIds: [],
       comments: [],
       status: "available",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
-    clothingItems.unshift(newItem); // Pushes to top of feed
+    clothingItems.unshift(newItem);
+    void appendAuditLog("item.created", {
+      itemId: newItem.id,
+      sellerId: currentUser.id,
+      sellerName: currentUser.username,
+      title: newItem.title,
+    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, item: newItem });
   });
 
@@ -602,14 +721,11 @@ export async function startServer(port = 3000) {
   });
 
   // Commments Social Element
-  app.post("/api/items/:id/comment", async (req, res) => {
+  app.post("/api/items/:id/comment", validateComment, sanitizeBody({ allowRichText: false }), (req, res) => {
     const { id } = req.params;
     const { text } = req.body;
-    if (!text || text.trim() === "") {
-      return res.status(400).json({ error: "Comment text cannot be empty" });
-    }
 
-    const item = clothingItems.find(i => i.id === id);
+    const item = clothingItems.find((i) => i.id === id);
     if (!item) {
       return res.status(404).json({ error: "Item not found" });
     }
@@ -618,14 +734,20 @@ export async function startServer(port = 3000) {
 
     const newComment: Comment = {
       id: "com_" + Date.now(),
-      userId: activeUser.id,
-      username: activeUser.username,
-      userAvatar: activeUser.avatar,
-      text: text,
-      createdAt: new Date().toISOString()
+      userId: currentUser.id,
+      username: currentUser.username,
+      userAvatar: currentUser.avatar,
+      text,
+      createdAt: new Date().toISOString(),
     };
 
     item.comments.push(newComment);
+    void appendAuditLog("item.comment", {
+      itemId: id,
+      commentId: newComment.id,
+      userId: currentUser.id,
+      username: currentUser.username,
+    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, comment: newComment });
   });
 
@@ -642,6 +764,13 @@ export async function startServer(port = 3000) {
     }
 
     item.status = "sold";
+    void appendAuditLog("item.purchased", {
+      itemId: item.id,
+      buyerId: currentUser.id,
+      buyerName: currentUser.username,
+      sellerId: item.sellerId,
+      sellerName: item.sellerName,
+    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, item });
   });
 
@@ -656,25 +785,29 @@ export async function startServer(port = 3000) {
   });
 
   // Send communication to seller
-  app.post("/api/chats", async (req, res) => {
+  app.post("/api/chats", validateChat, sanitizeBody({ allowRichText: false }), (req, res) => {
     const { itemId, receiverId, text } = req.body;
-    if (!itemId || !receiverId || !text || text.trim() === "") {
-      return res.status(400).json({ error: "Missing required chat parameters" });
-    }
 
     const activeUser = await resolveActiveUser(req);
 
     const newChat: ChatMessage = {
       id: "ch_" + Date.now(),
-      itemId: itemId,
-      senderId: activeUser.id,
-      senderName: activeUser.username,
-      receiverId: receiverId,
-      text: text,
-      createdAt: new Date().toISOString()
+      itemId,
+      senderId: currentUser.id,
+      senderName: currentUser.username,
+      receiverId,
+      text,
+      createdAt: new Date().toISOString(),
     };
 
     chatMessages.push(newChat);
+    void appendAuditLog("chat.sent", {
+      chatId: newChat.id,
+      itemId: newChat.itemId,
+      senderId: newChat.senderId,
+      senderName: newChat.senderName,
+      receiverId: newChat.receiverId,
+    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, chat: newChat });
   });
 

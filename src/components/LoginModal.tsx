@@ -1,12 +1,13 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Mail, ShieldAlert, Check, Lock, Chrome, BadgeCheck } from "lucide-react";
+import React, { useState,useEffect, useRef } from "react";
+import { X, Mail, ShieldAlert, Sparkles, Check,Chrome, RefreshCw, Lock,BadgeCheck } from "lucide-react";
 import { User } from "../types";
 import { LoginRequest } from "../lib/auth";
 import { turnstileSiteKey } from "../lib/firebase";
 
 interface LoginModalProps {
   onClose: () => void;
-  onLogin: (credentials: LoginRequest) => Promise<void> | void;
+  onLogin: (credentials: { email: string; password: string }) => Promise<void>;
+  //onLogin: (credentials: LoginRequest) => Promise<void> | void;
   currentUser: User | null;
   firebaseConfigured: boolean;
   loginError: string | null;
@@ -21,9 +22,44 @@ export default function LoginModal({
   loginError,
   canClose,
 }: LoginModalProps) {
-  const [usernameInput, setUsernameInput] = useState("");
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
+  const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!emailInput || !passwordInput) {
+      alert("Por favor ingresa tu email y contraseña.");
+      return;
+    }
+    setIsLoading(true);
+    try {
+      await onLogin({
+        email: emailInput,
+        password: passwordInput
+      });
+      setSubmitSuccess(true);
+      setTimeout(() => {
+        setIsLoading(false);
+        onClose();
+      }, 1200);
+    } catch (err) {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSwitchAccount = async (user: User) => {
+    // For quick switch, we need to know the password for demo users
+    // All demo users have the same password for testing
+    const demoPassword = "password123";
+    try {
+      await onLogin({ email: user.email, password: demoPassword });
+      alert(`Switched active profile to @${user.username}!`);
+      onClose();
+    } catch (err) {
+      // Error already shown
+    }
   const [displayNameInput, setDisplayNameInput] = useState("");
   const [firebaseAction, setFirebaseAction] = useState<"signIn" | "register">("signIn");
   const [submitSuccess, setSubmitSuccess] = useState(false);
@@ -157,8 +193,8 @@ export default function LoginModal({
         {submitSuccess ? (
           <div className="p-8 text-center bg-emerald-50 rounded-2xl border border-emerald-150 space-y-2">
             <Check size={28} className="mx-auto text-emerald-500 animate-bounce" />
-            <h4 className="text-sm font-bold text-emerald-900">Signed in successfully</h4>
-            <p className="text-xs text-emerald-705">Syncing your authenticated closet session...</p>
+            <h4 className="text-sm font-bold text-emerald-900">¡Inicio de sesión exitoso!</h4>
+            <p className="text-xs text-emerald-705">Sincronizando datos de tu perfil...</p>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -185,12 +221,12 @@ export default function LoginModal({
 
             <div>
               <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                Email
+                Email *
               </label>
               <input
                 type="email"
                 required
-                placeholder="maris@example.com"
+                placeholder="ejemplo@email.com"
                 className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
@@ -199,12 +235,12 @@ export default function LoginModal({
 
             <div>
               <label className="text-[11px] font-extrabold uppercase tracking-widest text-[#475569] block mb-1">
-                Password
+                Contraseña *
               </label>
               <input
                 type="password"
                 required
-                placeholder="••••••••"
+                placeholder="Ingresa tu contraseña"
                 className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
                 value={passwordInput}
                 onChange={(e) => setPasswordInput(e.target.value)}
