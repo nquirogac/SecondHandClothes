@@ -13,5 +13,7 @@ export async function appendAuditLog(
     ...details,
   };
 
+
+  
   await fs.appendFile(auditLogPath, JSON.stringify(entry) + "\n");
 }
