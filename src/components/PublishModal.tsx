@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { X, Sparkles, Image as ImageIcon, Camera } from "lucide-react";
 
 interface PublishModalProps {
@@ -12,8 +12,13 @@ interface PublishModalProps {
     brand: string;
     condition: string;
     price: number;
-  }) => void;
+  }) => void | Promise<void>;
 }
+
+type ImageSourceMode = "preset" | "url" | "upload";
+
+const MAX_CLIENT_IMAGE_SIZE_BYTES = 2 * 1024 * 1024;
+const ALLOWED_CLIENT_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
 const PRESET_IMAGES = [
   {
@@ -51,28 +56,100 @@ export default function PublishModal({ onClose, onPublish }: PublishModalProps) 
   const [brand, setBrand] = useState("");
   const [condition, setCondition] = useState("Excellent");
   const [price, setPrice] = useState("");
-  const [customUrlMode, setCustomUrlMode] = useState(false);
+  const [imageSourceMode, setImageSourceMode] = useState<ImageSourceMode>("preset");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [localPreviewUrl, setLocalPreviewUrl] = useState("");
+  const [imageUploadError, setImageUploadError] = useState("");
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    return () => {
+      if (localPreviewUrl) {
+        URL.revokeObjectURL(localPreviewUrl);
+      }
+    };
+  }, [localPreviewUrl]);
+
+  const handleImageFileChange = (file: File | null) => {
+    setImageUploadError("");
+
+    if (!file) {
+      setImageFile(null);
+      setLocalPreviewUrl("");
+      return;
+    }
+
+    // Validacion del lado cliente para buena experiencia; el servidor repite controles fuertes y no confia en el navegador.
+    if (!ALLOWED_CLIENT_IMAGE_TYPES.includes(file.type)) {
+      setImageUploadError("Only JPG, PNG, or WEBP files are allowed.");
+      return;
+    }
+
+    if (file.size > MAX_CLIENT_IMAGE_SIZE_BYTES) {
+      setImageUploadError("Image must be 2 MB or smaller.");
+      return;
+    }
+
+    setImageFile(file);
+    setImageUrl("");
+    setLocalPreviewUrl((previousUrl) => {
+      if (previousUrl) {
+        URL.revokeObjectURL(previousUrl);
+      }
+      return URL.createObjectURL(file);
+    });
+  };
+
+  const uploadSelectedImage = async () => {
+    if (!imageFile) {
+      return PRESET_IMAGES[0].url;
+    }
+
+    const formData = new FormData();
+    formData.append("image", imageFile);
+
+    const response = await fetch("/api/images/upload", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Image upload failed.");
+    }
+
+    return data.imageUrl as string;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title || !price || !category || !size || !condition) {
       alert("Please fill in all mandatory clothing parameters.");
       return;
     }
 
-    // Default image if empty
-    const selectedImage = imageUrl || PRESET_IMAGES[0].url;
+    try {
+      setIsUploadingImage(true);
+      setImageUploadError("");
+      const selectedImage = imageSourceMode === "upload"
+        ? await uploadSelectedImage()
+        : imageUrl || PRESET_IMAGES[0].url;
 
-    onPublish({
-      title,
-      description,
-      imageUrl: selectedImage,
-      category,
-      size,
-      brand: brand || "Unbranded / Unique Piece",
-      condition,
-      price: Number(price),
-    });
+      await onPublish({
+        title,
+        description,
+        imageUrl: selectedImage,
+        category,
+        size,
+        brand: brand || "Unbranded / Unique Piece",
+        condition,
+        price: Number(price),
+      });
+    } catch (err) {
+      setImageUploadError(err instanceof Error ? err.message : "Image upload failed.");
+    } finally {
+      setIsUploadingImage(false);
+    }
   };
 
   return (
@@ -211,26 +288,35 @@ export default function PublishModal({ onClose, onPublish }: PublishModalProps) 
                 <div className="flex bg-slate-100 p-1.5 rounded-2xl mb-4">
                   <button
                     type="button"
-                    onClick={() => setCustomUrlMode(false)}
+                    onClick={() => setImageSourceMode("preset")}
                     className={`flex-1 py-1.5 rounded-xl text-xs font-semibold cursor-pointer ${
-                      !customUrlMode ? "bg-white text-indigo-750 shadow-xs" : "text-slate-500 hover:text-slate-800"
+                      imageSourceMode === "preset" ? "bg-white text-indigo-750 shadow-xs" : "text-slate-500 hover:text-slate-800"
                     }`}
                   >
                     Preset Wardrobe
                   </button>
                   <button
                     type="button"
-                    onClick={() => setCustomUrlMode(true)}
+                    onClick={() => setImageSourceMode("url")}
                     className={`flex-1 py-1.5 rounded-xl text-xs font-semibold cursor-pointer ${
-                      customUrlMode ? "bg-white text-indigo-750 shadow-xs" : "text-slate-500 hover:text-slate-800"
+                      imageSourceMode === "url" ? "bg-white text-indigo-750 shadow-xs" : "text-slate-500 hover:text-slate-800"
                     }`}
                   >
-                    Image Web URL
+                    HTTPS URL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImageSourceMode("upload")}
+                    className={`flex-1 py-1.5 rounded-xl text-xs font-semibold cursor-pointer ${
+                      imageSourceMode === "upload" ? "bg-white text-indigo-750 shadow-xs" : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    Secure Upload
                   </button>
                 </div>
 
                 {/* Preset Picker */}
-                {!customUrlMode ? (
+                {imageSourceMode === "preset" ? (
                   <div className="grid grid-cols-3 gap-2">
                     {PRESET_IMAGES.map((img) => (
                       <button
@@ -251,7 +337,7 @@ export default function PublishModal({ onClose, onPublish }: PublishModalProps) 
                       </button>
                     ))}
                   </div>
-                ) : (
+                ) : imageSourceMode === "url" ? (
                   <div>
                     <input
                       type="url"
@@ -261,9 +347,24 @@ export default function PublishModal({ onClose, onPublish }: PublishModalProps) 
                       onChange={(e) => setImageUrl(e.target.value)}
                     />
                     <p className="text-[10px] font-semibold text-slate-400">
-                      Supports direct link formats like Unsplash or Pinterest apparel cataloging hooks.
+                      Only HTTPS image URLs are accepted by the server.
                     </p>
                   </div>
+                ) : (
+                  <div>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-sm text-slate-705 mb-2"
+                      onChange={(e) => handleImageFileChange(e.target.files?.[0] ?? null)}
+                    />
+                    <p className="text-[10px] font-semibold text-slate-400">
+                      JPG, PNG, or WEBP only. The server verifies file type, size, and binary signature.
+                    </p>
+                  </div>
+                )}
+                {imageUploadError && (
+                  <p className="text-[10px] font-bold text-red-500 mt-2">{imageUploadError}</p>
                 )}
               </div>
 
@@ -271,7 +372,7 @@ export default function PublishModal({ onClose, onPublish }: PublishModalProps) 
               <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center space-x-4">
                 <div className="h-20 w-20 rounded-xl bg-slate-200 overflow-hidden shrink-0">
                   <img
-                    src={imageUrl || PRESET_IMAGES[0].url}
+                    src={localPreviewUrl || imageUrl || PRESET_IMAGES[0].url}
                     alt="Garment showcase preview"
                     className="h-full w-full object-cover"
                   />
@@ -312,10 +413,11 @@ export default function PublishModal({ onClose, onPublish }: PublishModalProps) 
             </button>
             <button
               type="submit"
+              disabled={isUploadingImage}
               className="px-6 py-2.5 rounded-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-750 hover:to-purple-750 text-white text-sm font-bold shadow-lg shadow-indigo-100 cursor-pointer active:scale-95 transition-all flex items-center space-x-1.5"
             >
               <Sparkles size={16} />
-              <span>Publish Now</span>
+              <span>{isUploadingImage ? "Securing Image..." : "Publish Now"}</span>
             </button>
           </div>
 
