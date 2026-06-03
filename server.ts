@@ -1,10 +1,19 @@
 import "dotenv/config";
 import express, { type Request } from "express";
 import type { AddressInfo } from "net";
+import crypto from "crypto";
 import rateLimit from "express-rate-limit";
 import fs from "fs";
 import path from "path";
 import { User, ClothingItem, Comment, ChatMessage } from "./src/types";
+import {
+  sanitizeEmail,
+  sanitizeImageUrl,
+  sanitizeSlug,
+  sanitizeStylePreferences,
+  sanitizeTextInput,
+  validateStrongPassword,
+} from "./src/lib/security";
 import { applicationDefault, cert, getApps as getAdminApps, initializeApp } from "firebase-admin/app";
 import { getAuth as getAdminAuth } from "firebase-admin/auth";
 
@@ -344,12 +353,20 @@ export async function startServer(port = 3000) {
     return users[existingIndex];
   };
 
-  const parseStylePreferences = (value: string | undefined) => {
-    if (!value) {
-      return ["Casual"];
+  const hashPassword = (password: string) => {
+    const salt = crypto.randomBytes(16).toString("hex");
+    const derivedKey = crypto.scryptSync(password, salt, 64).toString("hex");
+    return `${salt}:${derivedKey}`;
+  };
+
+  const verifyPassword = (password: string, storedHash: string) => {
+    const [salt, expected] = storedHash.split(":");
+    if (!salt || !expected) {
+      return false;
     }
 
-    return value.split(",").map(style => style.trim()).filter(Boolean);
+    const actual = crypto.scryptSync(password, salt, 64).toString("hex");
+    return crypto.timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
   };
 
   const verifyTurnstileToken = async (token: string, remoteip?: string) => {
@@ -385,31 +402,6 @@ export async function startServer(port = 3000) {
     return { success: true };
   };
 
-  const buildHeaderFallbackUser = (req: Request) => {
-    const headerUserId = req.header("x-user-id");
-    const headerUsername = req.header("x-user-name");
-    const headerEmail = req.header("x-user-email");
-    const headerAvatar = req.header("x-user-avatar");
-
-    if (headerUserId && headerUsername && headerEmail && headerAvatar) {
-      const resolvedUser: User = {
-        id: headerUserId,
-        username: headerUsername,
-        email: headerEmail,
-        avatar: headerAvatar,
-        bio: req.header("x-user-bio") || users.find(user => user.id === headerUserId)?.bio || "Signed in user",
-        stylePreference: parseStylePreferences(req.header("x-user-styles") || undefined),
-        joinedDate: req.header("x-user-joined-date") || users.find(user => user.id === headerUserId)?.joinedDate || new Date().toISOString(),
-        rating: Number(req.header("x-user-rating") || 5),
-        passwordHash: "",
-      };
-
-      return upsertUserRecord(resolvedUser);
-    }
-
-    return currentUser;
-  };
-
   const resolveActiveUser = async (req: Request) => {
     const authorizationHeader = req.header("authorization");
     const bearerToken = authorizationHeader?.startsWith("Bearer ") ? authorizationHeader.slice(7) : null;
@@ -419,10 +411,10 @@ export async function startServer(port = 3000) {
         const decodedToken = await firebaseAdminAuth.verifyIdToken(bearerToken);
         const resolvedUser: User = {
           id: decodedToken.uid,
-          username: (decodedToken.name || decodedToken.email?.split("@")[0] || decodedToken.uid).toLowerCase().replace(/\s+/g, "_"),
-          email: decodedToken.email || `${decodedToken.uid}@example.com`,
-          avatar: decodedToken.picture || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
-          bio: "Signed in with Firebase Auth",
+          username: sanitizeSlug(decodedToken.name || decodedToken.email?.split("@")[0] || decodedToken.uid),
+          email: sanitizeEmail(decodedToken.email || `${decodedToken.uid}@example.com`),
+          avatar: sanitizeImageUrl(decodedToken.picture, "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200"),
+          bio: sanitizeTextInput("Signed in with Firebase Auth", { maxLength: 160 }),
           stylePreference: ["Casual"],
           joinedDate: new Date().toISOString(),
           rating: 5.0,
@@ -431,11 +423,21 @@ export async function startServer(port = 3000) {
 
         return upsertUserRecord(resolvedUser);
       } catch (error) {
-        console.warn("Firebase token verification failed. Falling back to header/demo identity.", error);
+        console.warn("Firebase token verification failed.", error);
       }
     }
 
-    return buildHeaderFallbackUser(req);
+    return null;
+  };
+
+  const requireActiveUser = async (req: Request, res: express.Response) => {
+    const activeUser = await resolveActiveUser(req);
+    if (!activeUser) {
+      res.status(401).json({ error: "Firebase authentication is required." });
+      return null;
+    }
+
+    return activeUser;
   };
 
   // ============================================
@@ -448,7 +450,15 @@ export async function startServer(port = 3000) {
   });
 
   app.get("/api/currentUser", async (req, res) => {
-    res.json(await resolveActiveUser(req));
+    const activeUser = await requireActiveUser(req, res);
+    if (!activeUser) {
+      return;
+    }
+    if (!activeUser) {
+      return res.status(401).json({ error: "Firebase authentication is required." });
+    }
+
+    return res.json(activeUser);
   });
 
   app.post("/api/security/turnstile/verify", turnstileLimiter, async (req, res) => {
@@ -467,52 +477,39 @@ export async function startServer(port = 3000) {
   });
 
   app.post("/api/login", loginLimiter, async (req, res) => {
-    const { userId, username, email } = req.body;
-    const turnstileToken = req.body.turnstileToken;
+    const authorizationHeader = req.header("authorization");
+    const bearerToken = authorizationHeader?.startsWith("Bearer ") ? authorizationHeader.slice(7) : null;
 
-    if (turnstileSecretKey) {
-      if (!turnstileToken) {
-        return res.status(400).json({ success: false, error: "Turnstile token is required." });
-      }
-
-      const turnstileResult = await verifyTurnstileToken(turnstileToken, req.ip);
-      if (!turnstileResult.success) {
-        return res.status(400).json(turnstileResult);
-      }
+    if (!bearerToken) {
+      return res.status(410).json({
+        success: false,
+        error: "Firebase handles login on the client; send a Bearer token or use /api/currentUser.",
+      });
     }
 
-    let foundUser = users.find(u => u.id === userId || u.username === username || u.email === email);
-
-    if (foundUser) {
-      currentUser = foundUser;
-      upsertUserRecord(foundUser);
-      return res.json({ success: true, user: currentUser });
-    }
-
-    // Fallback: If username doesn't exist, log in as new with random profile setup
-    if (username) {
-      const newUser: User = {
-        id: "u_" + Date.now(),
-        username: username,
-        email: email || `${username}@example.com`,
-        avatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200",
-        bio: "Bio not set yet - Tap edit profile to customize",
+    try {
+      const decodedToken = await firebaseAdminAuth.verifyIdToken(bearerToken);
+      const resolvedUser: User = {
+        id: decodedToken.uid,
+        username: sanitizeSlug(decodedToken.name || decodedToken.email?.split("@")[0] || decodedToken.uid),
+        email: sanitizeEmail(decodedToken.email || `${decodedToken.uid}@example.com`),
+        avatar: sanitizeImageUrl(decodedToken.picture, "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=200"),
+        bio: sanitizeTextInput("Signed in with Firebase Auth", { maxLength: 160 }),
         stylePreference: ["Casual"],
         joinedDate: new Date().toISOString(),
         rating: 5.0,
         passwordHash: "",
       };
-      users.push(newUser);
-      currentUser = newUser;
-      upsertUserRecord(newUser);
-      return res.json({ success: true, user: currentUser });
-    }
 
-    res.status(400).json({ success: false, error: "Invalid login credentials" });
+      currentUser = upsertUserRecord(resolvedUser);
+      return res.json({ success: true, user: currentUser });
+    } catch (error) {
+      return res.status(401).json({ success: false, error: "Invalid Firebase token." });
+    }
   });
 
   app.post("/api/register", registerLimiter, async (req, res) => {
-    const { username, email, bio, stylePreference, avatar } = req.body;
+    const { username, email, password, bio, stylePreference, avatar } = req.body;
     const turnstileToken = req.body.turnstileToken;
 
     if (turnstileSecretKey) {
@@ -530,14 +527,24 @@ export async function startServer(port = 3000) {
       return res.status(400).json({ error: "Username and Email are required parameters" });
     }
 
+    const passwordCheck = validateStrongPassword(password);
+    if (!passwordCheck.valid) {
+      return res.status(400).json({ error: passwordCheck.message || "Invalid password." });
+    }
+
+    const normalizedUsername = sanitizeSlug(username);
+    const normalizedEmail = sanitizeEmail(email);
+    const normalizedBio = sanitizeTextInput(bio || "Sustainable apparel searcher", { maxLength: 160 });
+    const normalizedAvatar = sanitizeImageUrl(avatar, "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200");
+
     const newUser: User = {
       id: "u_" + Date.now(),
-      username: username.toLowerCase().replace(/\s+/g, "_"),
-      email,
-      passwordHash: "", // Guardamos el hash, NUNCA la contraseña plana
-      avatar: avatar || "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=200",
-      bio: bio || "Sustainable apparel searcher",
-      stylePreference: stylePreference || ["Casual"],
+      username: normalizedUsername || "new_user",
+      email: normalizedEmail,
+      passwordHash: hashPassword(password),
+      avatar: normalizedAvatar,
+      bio: normalizedBio,
+      stylePreference: sanitizeStylePreferences(stylePreference),
       joinedDate: new Date().toISOString(),
       rating: 5.0,
     };
@@ -556,21 +563,36 @@ export async function startServer(port = 3000) {
   app.post("/api/items", async (req, res) => {
     const { title, description, imageUrl, category, size, brand, condition, price } = req.body;
 
-    const activeUser = await resolveActiveUser(req);
+    const activeUser = await requireActiveUser(req, res);
+    if (!activeUser) {
+      return;
+    }
+    const sanitizedTitle = sanitizeTextInput(title, { maxLength: 120 });
+    const sanitizedDescription = sanitizeTextInput(description || "Gorgeous pre-loved fashion piece.", { maxLength: 500 });
+    const sanitizedImageUrl = sanitizeImageUrl(imageUrl, "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=800");
+    const sanitizedCategory = sanitizeTextInput(category, { maxLength: 30 });
+    const sanitizedSize = sanitizeTextInput(size, { maxLength: 20 });
+    const sanitizedBrand = sanitizeTextInput(brand || "Unbranded / Vintage", { maxLength: 60 });
+    const sanitizedCondition = sanitizeTextInput(condition, { maxLength: 30 });
+    const parsedPrice = Number(price);
+
+    if (!sanitizedTitle || !sanitizedCategory || !sanitizedSize || !sanitizedCondition || Number.isNaN(parsedPrice) || parsedPrice <= 0) {
+      return res.status(400).json({ error: "Invalid item payload" });
+    }
 
     const newItem: ClothingItem = {
       id: "c_" + Date.now(),
       sellerId: activeUser.id,
       sellerName: activeUser.username,
       sellerAvatar: activeUser.avatar,
-      title: title,
-      description: description || "Gorgeous pre-loved fashion piece.",
-      imageUrl: imageUrl || "https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=800",
-      category,
-      size,
-      brand: brand || "Unbranded / Vintage",
-      condition,
-      price: Number(price),
+      title: sanitizedTitle,
+      description: sanitizedDescription,
+      imageUrl: sanitizedImageUrl,
+      category: sanitizedCategory,
+      size: sanitizedSize,
+      brand: sanitizedBrand,
+      condition: sanitizedCondition,
+      price: parsedPrice,
       likesCount: 0,
       likedByUserIds: [],
       comments: [],
@@ -590,7 +612,10 @@ export async function startServer(port = 3000) {
       return res.status(404).json({ error: "Item not found" });
     }
 
-    const activeUser = await resolveActiveUser(req);
+    const activeUser = await requireActiveUser(req, res);
+    if (!activeUser) {
+      return;
+    }
 
     const likedIndex = item.likedByUserIds.indexOf(activeUser.id);
     if (likedIndex > -1) {
@@ -616,14 +641,22 @@ export async function startServer(port = 3000) {
       return res.status(404).json({ error: "Item not found" });
     }
 
-    const activeUser = await resolveActiveUser(req);
+    const activeUser = await requireActiveUser(req, res);
+    if (!activeUser) {
+      return;
+    }
+    const sanitizedText = sanitizeTextInput(text, { maxLength: 280 });
+
+    if (!sanitizedText) {
+      return res.status(400).json({ error: "Comment text is required" });
+    }
 
     const newComment: Comment = {
       id: "com_" + Date.now(),
       userId: activeUser.id,
       username: activeUser.username,
       userAvatar: activeUser.avatar,
-      text: text,
+      text: sanitizedText,
       createdAt: new Date().toISOString()
     };
 

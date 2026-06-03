@@ -18,6 +18,7 @@ import ProfileModal from "./components/ProfileModal";
 import LoginModal from "./components/LoginModal";
 import { Sparkles, ShoppingBag, PlusCircle, Bookmark, Flame, RotateCw, HelpCircle, FileText } from "lucide-react";
 import { buildMarketplaceHeaders, type LoginRequest, firebaseUserToMarketplaceUser, mergeMarketplaceUser } from "./lib/auth";
+import { sanitizeTextInput, validateStrongPassword } from "./lib/security";
 import { firebaseAuth, firebaseConfigured, googleProvider, turnstileSiteKey } from "./lib/firebase";
 
 export default function App() {
@@ -433,8 +434,14 @@ export default function App() {
     }
 
     if (request.action === "register") {
+      const passwordCheck = validateStrongPassword(request.password);
+      if (!passwordCheck.valid) {
+        setLoginError(passwordCheck.message || "La contraseña no cumple la política de seguridad.");
+        return;
+      }
+
       const result = await createUserWithEmailAndPassword(firebaseAuth, request.email, request.password);
-      const displayName = request.displayName || request.email.split("@")[0];
+      const displayName = sanitizeTextInput(request.displayName || request.email.split("@")[0], { maxLength: 40 }) || request.email.split("@")[0];
       await updateProfile(result.user, { displayName });
       return;
     }

@@ -11,6 +11,17 @@ El sistema permite:
 - comentar y dar like,
 - abrir chats entre usuarios.
 
+## 1.1) Estado actual de seguridad
+
+El flujo de autenticación ya no usa login heredado en el backend. La autenticación operativa es:
+
+- Firebase Auth en el frontend.
+- Firebase Admin en el backend para validar el ID token.
+- Cloudflare Turnstile en login y registro.
+- Rechazo explícito si el Bearer de Firebase es inválido o inexistente.
+- Sanitización/allowlist server-side para texto, emails, URLs y slugs.
+- Política de contraseña fuerte en registro.
+
 ## 2) RNF de seguridad propuestos
 
 ### RNF-S1. Autenticación externa
@@ -34,6 +45,12 @@ Las claves privadas deben mantenerse fuera del repositorio y cargarse como varia
 ### RNF-S7. Trazabilidad mínima
 Los errores de autenticación y captcha deben quedar visibles en consola o respuesta controlada, sin exponer secretos.
 
+### RNF-S8. Sanitización de entradas
+El sistema debe limpiar y normalizar entradas de usuario antes de persistirlas o reutilizarlas, especialmente campos de texto, URLs, emails y slugs, para reducir riesgo de Injection y XSS reflejado o almacenado.
+
+### RNF-S9. Política de contraseña fuerte
+El registro debe exigir contraseñas de al menos 12 caracteres con mayúsculas, minúsculas, números y caracteres especiales.
+
 ## 3) Casos de prueba de seguridad
 
 | ID | Caso | Entrada | Resultado esperado |
@@ -44,7 +61,9 @@ Los errores de autenticación y captcha deben quedar visibles en consola o respu
 | ST-04 | Token Firebase falso | `Authorization: Bearer` inválido | El backend no debe confiar en el token |
 | ST-05 | Exceso de intentos | Muchas solicitudes a login/register | Bloqueo temporal por rate limit |
 | ST-06 | Variables secretas ausentes | Backend sin `TURNSTILE_SECRET_KEY` o sin credenciales | El sistema debe fallar de forma controlada |
-| ST-07 | Acceso a rutas protegidas | Petición a acciones sensibles sin identidad válida | Rechazo o uso del fallback controlado |
+| ST-07 | Acceso a rutas protegidas | Petición a acciones sensibles sin identidad válida | Rechazo con `401` |
+| ST-08 | Texto con payload XSS | Descripción, comentario o bio con HTML/JS | El backend guarda el texto saneado y no ejecuta scripts |
+| ST-09 | Contraseña débil | Contraseña de menos de 12 caracteres o sin complejidad mínima | El registro se rechaza antes de crear la cuenta |
 
 ## 4) Implementación de los RNF
 
@@ -53,7 +72,10 @@ En este proyecto, los RNF ya están implementados de esta forma:
 - **Firebase Auth** en el cliente para login y registro.
 - **Firebase Admin** en el backend para verificar el ID token.
 - **Cloudflare Turnstile** en el formulario y validación server-side.
-- **Rate limiting** para `/api/login`, `/api/register` y `/api/security/turnstile/verify`.
+- **Rate limiting** para `/api/register` y `/api/security/turnstile/verify`.
+- **Login Firebase-only**: `/api/login` rechaza el flujo heredado y exige Bearer válido.
+- **Sanitización server-side** de campos de usuario antes de persistir datos.
+- **Contraseña fuerte** obligatoria en registro.
 - **Variables de entorno** para secretos y configuración pública.
 
 Archivos relevantes:
@@ -72,15 +94,18 @@ Pruebas que se pueden ejecutar manualmente:
 
 1. Abrir la app.
 2. Intentar login con Turnstile válido.
-3. Intentar login sin Turnstile.
-4. Intentar login con token falso.
-5. Repetir solicitudes hasta disparar rate limit.
-6. Revisar que el backend no acepte acciones sensibles sin identidad válida.
+3. Intentar login sin Bearer de Firebase en el backend.
+4. Intentar login con token Firebase inválido.
+5. Intentar registro con contraseña débil.
+6. Intentar guardar comentario, bio o descripción con payload HTML/JS.
+7. Repetir solicitudes hasta disparar rate limit.
+8. Revisar que el backend no acepte acciones sensibles sin identidad válida.
 
 Pruebas automatizadas recomendadas:
 
 - `npm run lint`
 - `npm run build`
+- `npm test -- tests/backend/rnf_seguridad.test.ts`
 - peticiones con `curl` o `Invoke-WebRequest` a `/api/currentUser`, `/api/login` y `/api/register`
 
 ## 6) Laboratorio de hacking ético
@@ -115,4 +140,4 @@ El sistema propuesto cumple el objetivo del trabajo porque integra dos controles
 - **Captcha** para reducir automatización maliciosa,
 - **OAuth externo** con Firebase para autenticación segura.
 
-Además, se complementa con validación backend, rate limiting y manejo de secretos, lo que permite definir casos de prueba y realizar un laboratorio ético sobre la superficie de ataque del sistema.
+Además, se complementa con validación backend, sanitización de entradas, rate limiting y manejo de secretos, lo que permite definir casos de prueba y realizar un laboratorio ético sobre la superficie de ataque del sistema.

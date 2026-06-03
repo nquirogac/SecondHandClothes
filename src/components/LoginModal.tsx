@@ -203,11 +203,18 @@ export default function LoginModal({
               <input
                 type="password"
                 required
+                minLength={firebaseAction === "register" ? 12 : undefined}
+                autoComplete={firebaseAction === "register" ? "new-password" : "current-password"}
                 placeholder="••••••••"
                 className="w-full px-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-hidden focus:ring-1 focus:ring-indigo-500 text-slate-800"
                 value={passwordInput}
                 onChange={(e) => setPasswordInput(e.target.value)}
               />
+              {firebaseAction === "register" && (
+                <p className="mt-1 text-[10px] text-slate-500 leading-relaxed">
+                  Usa al menos 12 caracteres con mayúsculas, minúsculas, un número y un símbolo.
+                </p>
+              )}
             </div>
 
             {firebaseAction === "register" && (

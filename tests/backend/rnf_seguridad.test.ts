@@ -86,20 +86,19 @@ describe("RNF-S3: Validación del captcha en servidor (Turnstile)", () => {
 });
 
 describe("RNF-S2/RNF-S3: captcha requerido en login/registro cuando TURNSTILE_SECRET_KEY está configurado", () => {
-  test("POST /api/login rechaza si falta turnstileToken", async () => {
+  test("POST /api/login rechaza el flujo heredado sin Bearer de Firebase", async () => {
     const { app, server } = await startServer(0);
     const res = await request(app).post("/api/login").send({ username: "demo" });
-    expect(res.status).toBe(400);
-    expect(res.body).toHaveProperty("error", "Turnstile token is required.");
-    expect((global as any).fetch).not.toHaveBeenCalled();
+    expect(res.status).toBe(410);
+    expect(res.body).toHaveProperty("error");
+    expect(String(res.body.error)).toContain("Firebase");
 
     console.log(
       [
-        "[RNF-S2/RNF-S3] Evidencia captcha requerido (/api/login)",
-        "- caso: falta turnstileToken",
+        "[RNF-S2/RNF-S3] Evidencia login heredado desactivado (/api/login)",
+        "- caso: sin Bearer de Firebase",
         `- status=${res.status}`,
         `- body=${JSON.stringify(res.body)}`,
-        "- fetch=NO llamado (se rechaza antes de verificar en Cloudflare)",
       ].join("\n")
     );
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -107,7 +106,11 @@ describe("RNF-S2/RNF-S3: captcha requerido en login/registro cuando TURNSTILE_SE
 
   test("POST /api/register rechaza si falta turnstileToken", async () => {
     const { app, server } = await startServer(0);
-    const res = await request(app).post("/api/register").send({ username: "demo", email: "demo@example.com" });
+    const res = await request(app).post("/api/register").send({
+      username: "demo",
+      email: "demo@example.com",
+      password: "StrongPass123!",
+    });
     expect(res.status).toBe(400);
     expect(res.body).toHaveProperty("error", "Turnstile token is required.");
     expect((global as any).fetch).not.toHaveBeenCalled();
@@ -128,7 +131,7 @@ describe("RNF-S2/RNF-S3: captcha requerido en login/registro cuando TURNSTILE_SE
     const { app, server } = await startServer(0);
     const res = await request(app)
       .post("/api/register")
-      .send({ username: "demo", email: "demo@example.com", turnstileToken: "ok" });
+      .send({ username: "demo", email: "demo@example.com", password: "StrongPass123!", turnstileToken: "ok" });
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty("success", true);
     expect(res.body.user).toHaveProperty("id");
@@ -147,18 +150,36 @@ describe("RNF-S2/RNF-S3: captcha requerido en login/registro cuando TURNSTILE_SE
     );
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
+
+    test("POST /api/register rechaza contraseña débil", async () => {
+      const { app, server } = await startServer(0);
+      const res = await request(app)
+        .post("/api/register")
+        .send({ username: "demo", email: "demo@example.com", password: "weak", turnstileToken: "ok" });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty("error");
+      expect(String(res.body.error).toLowerCase()).toContain("contraseña");
+
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
 });
 
 describe("RNF-S5: Control de abuso (rate limiting)", () => {
-  test("POST /api/login: después de 10 requests en la ventana, el 11° debe responder 429 (rate limit activo)", async () => {
+  test("POST /api/register: después de 5 requests en la ventana, el 6° debe responder 429 (rate limit activo)", async () => {
     const { app, server } = await startServer(0);
 
     const report: Array<{ attempt: number; status: number; limit?: string; remaining?: string; reset?: string }> = [];
 
-    for (let i = 0; i < 10; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       const res = await request(app)
-        .post("/api/login")
-        .send({ username: `user_${i}`, turnstileToken: "ok" });
+        .post("/api/register")
+        .send({
+          username: `user_${i}`,
+          email: `user_${i}@example.com`,
+          password: "StrongPass123!",
+          turnstileToken: "ok",
+        });
       expect([200, 400]).toContain(res.status);
       report.push({
         attempt: i + 1,
@@ -170,11 +191,16 @@ describe("RNF-S5: Control de abuso (rate limiting)", () => {
     }
 
     const blocked = await request(app)
-      .post("/api/login")
-      .send({ username: "user_blocked", turnstileToken: "ok" });
+      .post("/api/register")
+      .send({
+        username: "user_blocked",
+        email: "user_blocked@example.com",
+        password: "StrongPass123!",
+        turnstileToken: "ok",
+      });
     expect(blocked.status).toBe(429);
     report.push({
-      attempt: 11,
+      attempt: 6,
       status: blocked.status,
       limit: blocked.headers["ratelimit-limit"],
       remaining: blocked.headers["ratelimit-remaining"],
@@ -185,7 +211,7 @@ describe("RNF-S5: Control de abuso (rate limiting)", () => {
     const remainingHeader = blocked.headers["ratelimit-remaining"];
 
     expect(limitHeader).toBeDefined();
-    expect(Number(limitHeader)).toBe(10);
+    expect(Number(limitHeader)).toBe(5);
 
     if (remainingHeader !== undefined) {
       expect(Number(remainingHeader)).toBe(0);
@@ -195,7 +221,7 @@ describe("RNF-S5: Control de abuso (rate limiting)", () => {
 
     console.log(
       [
-        "[RNF-S5] Evidencia rate limiting (/api/login)",
+        "[RNF-S5] Evidencia rate limiting (/api/register)",
         ...report.map((row) => `- intento ${row.attempt}: status=${row.status} limit=${row.limit ?? "?"} remaining=${row.remaining ?? "?"} reset=${row.reset ?? "?"}`),
       ].join("\n")
     );
@@ -232,31 +258,25 @@ describe("RNF-S1/RNF-S4: Firebase Auth + verificación de identidad en backend",
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  test("GET /api/currentUser NO confía en Bearer inválido y cae al fallback de headers", async () => {
+  test("GET /api/currentUser rechaza Bearer inválido sin fallback", async () => {
     verifyIdTokenMock.mockRejectedValueOnce(new Error("Invalid token"));
 
     const { app, server } = await startServer(0);
     const res = await request(app)
       .get("/api/currentUser")
       .set("Authorization", "Bearer invalid_token")
-      .set("x-user-id", "u_header")
-      .set("x-user-name", "header_user")
-      .set("x-user-email", "header@example.com")
-      .set("x-user-avatar", "https://example.com/a.png");
 
     expect(verifyIdTokenMock).toHaveBeenCalledWith("invalid_token");
-    expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty("id", "u_header");
-    expect(res.body).toHaveProperty("username", "header_user");
+    expect(res.status).toBe(401);
+    expect(res.body).toHaveProperty("error");
 
     console.log(
       [
-        "[RNF-S4] Evidencia rechazo de token inválido + fallback controlado",
-        "- caso: Bearer inválido (mock verifyIdToken falla) + headers x-user-*",
+        "[RNF-S4] Evidencia rechazo de token inválido sin fallback",
+        "- caso: Bearer inválido (mock verifyIdToken falla)",
         `- verifyIdToken.calls=${verifyIdTokenMock.mock.calls.length}`,
         `- status=${res.status}`,
-        `- fallbackUser.id=${res.body?.id ?? "?"}`,
-        `- fallbackUser.username=${res.body?.username ?? "?"}`,
+        `- body=${JSON.stringify(res.body)}`,
       ].join("\n")
     );
     await new Promise<void>((resolve) => server.close(() => resolve()));
