@@ -1,0 +1,212 @@
+{
+  "timestamp": "2026-06-03T01:41:28.862Z",
+  "timestamp_readable": "2/6/2026, 20:41:28",
+  "os": {
+    "tests": [
+      {
+        "name": "Permisos de archivo package.json: 644",
+        "passed": true,
+        "details": "Modo: 644",
+        "timestamp": "2026-06-03T01:41:28.909Z"
+      },
+      {
+        "name": "Permisos de archivo server.ts: 644",
+        "passed": true,
+        "details": "Modo: 644",
+        "timestamp": "2026-06-03T01:41:28.909Z"
+      },
+      {
+        "name": "Variables de entorno configuradas",
+        "passed": false,
+        "details": "Variables encontradas: ninguna",
+        "timestamp": "2026-06-03T01:41:28.909Z"
+      },
+      {
+        "name": "node_modules en sistema",
+        "passed": true,
+        "details": "Presente",
+        "timestamp": "2026-06-03T01:41:28.910Z"
+      },
+      {
+        "name": "Información del SO recopilada",
+        "passed": true,
+        "details": "darwin x64 - 4 cores",
+        "timestamp": "2026-06-03T01:41:28.910Z"
+      }
+    ],
+    "passed": 4,
+    "failed": 1,
+    "vulnerabilities": [
+      {
+        "severity": "MEDIUM",
+        "title": "Archivo .env no encontrado",
+        "description": "Las variables sensibles deben estar en un archivo .env no versionado",
+        "timestamp": "2026-06-03T01:41:28.910Z"
+      }
+    ]
+  },
+  "network": {
+    "tests": [
+      {
+        "name": "Puerto 3000 disponible",
+        "passed": true,
+        "details": "Será usado para servidor",
+        "timestamp": "2026-06-03T01:41:28.910Z"
+      },
+      {
+        "name": "express-validator instalado",
+        "passed": true,
+        "details": "Presente",
+        "timestamp": "2026-06-03T01:41:28.910Z"
+      },
+      {
+        "name": "sanitize-html instalado",
+        "passed": true,
+        "details": "Presente",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "validator instalado",
+        "passed": true,
+        "details": "Presente",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "SQL Injection en username",
+        "passed": true,
+        "details": "Payload: admin' OR '1'='1...",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "XSS en bio",
+        "passed": true,
+        "details": "Payload: <script>alert(\"xss\")</script>...",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "XSS en title",
+        "passed": true,
+        "details": "Payload: <img src=x onerror=\"alert(1)\">...",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "Null bytes",
+        "passed": false,
+        "details": "Payload: test\u0000injection...",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "Unicode escape",
+        "passed": true,
+        "details": "Payload: \\u003cscript\\u003e...",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "Header Content-Type configurado",
+        "passed": true,
+        "details": "Recomendado: application/json; charset=utf-8",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "Header X-Frame-Options configurado",
+        "passed": true,
+        "details": "Recomendado: DENY",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "Header X-Content-Type-Options configurado",
+        "passed": true,
+        "details": "Recomendado: nosniff",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "Header X-XSS-Protection configurado",
+        "passed": true,
+        "details": "Recomendado: 1; mode=block",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      },
+      {
+        "name": "Header Strict-Transport-Security configurado",
+        "passed": true,
+        "details": "Recomendado: max-age=31536000",
+        "timestamp": "2026-06-03T01:41:28.911Z"
+      }
+    ],
+    "passed": 13,
+    "failed": 1,
+    "vulnerabilities": []
+  },
+  "database": {
+    "tests": [
+      {
+        "name": "Consultas parametrizadas en db.ts",
+        "passed": true,
+        "details": "Usando pool.query con parámetros",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      },
+      {
+        "name": "Sin concatenación de SQL",
+        "passed": true,
+        "details": "Correcto: sin concatenación",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      },
+      {
+        "name": "Protección contra: Classic OR",
+        "passed": true,
+        "details": "Payload: ' OR '1'='1",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      },
+      {
+        "name": "Protección contra: UNION SELECT",
+        "passed": true,
+        "details": "Payload: ' UNION SELECT NULL, NULL, NULL--",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      },
+      {
+        "name": "Protección contra: DROP TABLE",
+        "passed": true,
+        "details": "Payload: '; DROP TABLE users;--",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      },
+      {
+        "name": "Protección contra: Sleep injection",
+        "passed": true,
+        "details": "Payload: ' OR SLEEP(5);--",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      },
+      {
+        "name": "Validación de entrada implementada",
+        "passed": true,
+        "details": "Middleware de validación presente",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      },
+      {
+        "name": "Sanitización de entrada",
+        "passed": true,
+        "details": "Middleware de sanitización presente",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      },
+      {
+        "name": "Protección contra brute force",
+        "passed": true,
+        "details": "Servicio de protección presente",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      },
+      {
+        "name": "Hashing de contraseñas (Argon2)",
+        "passed": true,
+        "details": "Algoritmo de hashing seguro",
+        "timestamp": "2026-06-03T01:41:28.912Z"
+      }
+    ],
+    "passed": 10,
+    "failed": 0,
+    "vulnerabilities": []
+  },
+  "summary": {
+    "totalTests": 29,
+    "totalPassed": 27,
+    "totalFailed": 2,
+    "riskLevel": "MEDIUM"
+  }
+}
