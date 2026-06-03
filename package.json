@@ -16,7 +16,10 @@
     "test:scripts": "npm run test:password && npm run test:sanitizer",
     "test:password:e2e": "tsx scripts/password-e2e.ts",
     "test:sanitizer:e2e": "tsx scripts/sanitizer-e2e.ts",
-    "test:ci": "jest --runInBand --detectOpenHandles"
+    "test:ci": "jest --runInBand --detectOpenHandles",
+    "test:security": "node ./scripts/security-tests.js",
+    "test:all": "node ./scripts/audit-brute-force-tests.js && node ./scripts/password-tests.js && node ./scripts/security-tests.js",
+    "test:ethical-hacking": "node ./scripts/ethical-hacking-lab.js"
   },
   "dependencies": {
     "argon2": "^0.30.2",
