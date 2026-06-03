@@ -2,11 +2,17 @@ import "dotenv/config";
 import express, { type Request } from "express";
 import type { AddressInfo } from "net";
 import rateLimit from "express-rate-limit";
+import multer from "multer";
 import fs from "fs";
 import path from "path";
 import { User, ClothingItem, Comment, ChatMessage } from "./src/types";
 import { applicationDefault, cert, getApps as getAdminApps, initializeApp } from "firebase-admin/app";
 import { getAuth as getAdminAuth } from "firebase-admin/auth";
+import { validateCreateItem } from "./src/middleware/inputValidation";
+import { sanitizeBody } from "./src/middleware/sanitizer";
+import { enforceHttpsInProduction, secureHttpHeaders } from "./src/middleware/secureTransport";
+import { saveSecureUploadedImage, secureImageUpload } from "./src/services/imageUploadSecurity";
+import { appendAuditLog } from "./src/services/auditLog";
 
 const firebaseAdminApp = (() => {
   if (getAdminApps().length > 0) {
@@ -61,7 +67,24 @@ export async function startServer(port = 3000) {
   const app = express();
   const PORT = port;
 
+  app.set("trust proxy", 1);
+  app.use(enforceHttpsInProduction());
+  app.use(secureHttpHeaders());
   app.use(express.json({ limit: "10kb" }));
+  app.use(
+    "/uploads",
+    (_req, res, next) => {
+      // Las imagenes subidas se sirven con headers estrictos para que el navegador no ejecute contenido disfrazado.
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox");
+      next();
+    },
+    express.static(path.join(process.cwd(), "uploads"), {
+      fallthrough: false,
+      immutable: true,
+      maxAge: "1d",
+    })
+  );
 
   // Basic rate limiting to protect public API surface
   const generalLimiter = rateLimit({
@@ -553,7 +576,31 @@ export async function startServer(port = 3000) {
     res.json(clothingItems);
   });
 
-  app.post("/api/items", async (req, res) => {
+  app.post("/api/images/upload", secureImageUpload.single("image"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, error: "Image file is required." });
+      }
+
+      const activeUser = await resolveActiveUser(req);
+      // Validacion de contenido real: ademas del MIME type, revisamos los bytes magicos para bloquear archivos renombrados.
+      const imageUrl = await saveSecureUploadedImage(req.file);
+      void appendAuditLog("image.uploaded", {
+        userId: activeUser.id,
+        username: activeUser.username,
+        imageUrl,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+      }).catch((err) => console.error("Audit log write failed:", err));
+
+      res.status(201).json({ success: true, imageUrl });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Invalid image upload.";
+      res.status(400).json({ success: false, error: message });
+    }
+  });
+
+  app.post("/api/items", validateCreateItem, sanitizeBody({ allowRichText: true, preserveFields: ["imageUrl"] }), async (req, res) => {
     const { title, description, imageUrl, category, size, brand, condition, price } = req.body;
 
     const activeUser = await resolveActiveUser(req);
@@ -579,6 +626,12 @@ export async function startServer(port = 3000) {
     };
 
     clothingItems.unshift(newItem);
+    void appendAuditLog("item.created", {
+      itemId: newItem.id,
+      sellerId: activeUser.id,
+      sellerName: activeUser.username,
+      title: newItem.title,
+    }).catch((err) => console.error("Audit log write failed:", err));
     res.json({ success: true, item: newItem });
   });
 
@@ -675,6 +728,25 @@ export async function startServer(port = 3000) {
 
     chatMessages.push(newChat);
     res.json({ success: true, chat: newChat });
+  });
+
+  app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!err) {
+      return next();
+    }
+
+    if (err instanceof multer.MulterError) {
+      const message = err.code === "LIMIT_FILE_SIZE"
+        ? "Image is too large. Maximum allowed size is 2 MB."
+        : err.message;
+      return res.status(400).json({ success: false, error: message });
+    }
+
+    if (err instanceof Error) {
+      return res.status(400).json({ success: false, error: err.message });
+    }
+
+    return res.status(500).json({ success: false, error: "Unexpected server error." });
   });
 
   // ============================================
